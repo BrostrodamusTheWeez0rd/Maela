@@ -17,4 +17,10 @@ Before tagging a public build:
 - [ ] Host kick and session-ban controls work.
 - [ ] Windows Firewall helper succeeds when approved.
 - [ ] UPnP success and failure paths are both understandable.
+- [ ] With speakers (no headset), the other side does not hear their own voice echoed back after a second or two of talking.
+- [ ] Turning echo cancellation off in Settings takes effect immediately.
+- [ ] `scripts\test_ci.cmd` passes.
+- [ ] `VERSION` is bumped and `CHANGELOG.md` has a matching section.
+- [ ] After the release workflow runs, the release has both `Maela.exe` and `Maela.exe.sha256`.
+- [ ] A copy of the previous version offers the update and restarts into the new version.
 - [ ] `package_release.cmd` produces the expected release ZIP.

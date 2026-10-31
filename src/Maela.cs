@@ -17,19 +17,28 @@ using System.Xml;
 [assembly: System.Reflection.AssemblyProduct("m\u00E6la")]
 [assembly: System.Reflection.AssemblyDescription("Private self-hosted voice rooms")]
 [assembly: System.Reflection.AssemblyCompany("m\u00E6la")]
-[assembly: System.Reflection.AssemblyVersion("0.6.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("0.6.0.0")]
+// AssemblyVersion / AssemblyFileVersion are generated from the VERSION file by scripts\build_ci.cmd.
 
 namespace Maela
 {
     internal static class Program
     {
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+
+            bool justUpdated = false;
+            int i;
+            for (i = 0; args != null && i < args.Length; i++)
+            {
+                if (String.Equals(args[i], Updater.UpdatedArgument, StringComparison.OrdinalIgnoreCase))
+                    justUpdated = true;
+            }
+
+            Updater.CleanupAfterUpdate();
+            Application.Run(new MainForm(justUpdated));
         }
     }
 
@@ -39,7 +48,6 @@ namespace Maela
         private static readonly Color Sidebar = Color.FromArgb(43, 45, 49);
         private static readonly Color MainBg = Color.FromArgb(49, 51, 56);
         private static readonly Color UserBg = Color.FromArgb(35, 36, 40);
-        private static readonly Color Hover = Color.FromArgb(53, 55, 60);
         private static readonly Color Selected = Color.FromArgb(64, 66, 73);
         private static readonly Color TextMain = Color.FromArgb(242, 243, 245);
         private static readonly Color TextMuted = Color.FromArgb(148, 155, 164);
@@ -100,9 +108,19 @@ namespace Maela
         private bool _keepRoomAlive;
         private bool _allowTrueClose;
         private readonly NotifyIcon _notifyIcon = new NotifyIcon();
+        private readonly System.Windows.Forms.Timer _updateTimer = new System.Windows.Forms.Timer();
+        private readonly bool _justUpdated;
+        private bool _updateCheckRunning;
+        private bool _updateInstalling;
+        private UpdateInfo _pendingUpdate;
 
-        public MainForm()
+        public MainForm() : this(false)
         {
+        }
+
+        public MainForm(bool justUpdated)
+        {
+            _justUpdated = justUpdated;
             Text = "m\u00E6la";
             try { Icon = Branding.LoadAppIcon(); } catch { Icon = SystemIcons.Application; }
             ClientSize = new Size(1040, 680);
@@ -141,6 +159,188 @@ namespace Maela
                 Close();
             });
             _notifyIcon.ContextMenuStrip = trayMenu;
+            _notifyIcon.BalloonTipClicked += delegate
+            {
+                RestoreFromTray();
+                ShowPendingUpdate();
+            };
+
+            // First check shortly after launch, then every six hours (hosts often run for days in the tray).
+            _updateTimer.Interval = 4000;
+            _updateTimer.Tick += delegate
+            {
+                _updateTimer.Interval = 6 * 60 * 60 * 1000;
+                if (_preferences.AutoUpdate)
+                    CheckForUpdates(false);
+            };
+            Shown += delegate
+            {
+                _updateTimer.Start();
+                if (_justUpdated)
+                {
+                    _notifyIcon.Visible = true;
+                    _notifyIcon.BalloonTipTitle = "m\u00E6la updated";
+                    _notifyIcon.BalloonTipText = "You are now running m\u00E6la " + Updater.CurrentVersionText + ".";
+                    try { _notifyIcon.ShowBalloonTip(3000); } catch { }
+                    System.Windows.Forms.Timer hide = new System.Windows.Forms.Timer();
+                    hide.Interval = 6000;
+                    hide.Tick += delegate { hide.Stop(); hide.Dispose(); if (Visible) _notifyIcon.Visible = false; };
+                    hide.Start();
+                }
+            };
+        }
+
+        private void CheckForUpdates(bool userInitiated)
+        {
+            if (_updateCheckRunning || _updateInstalling)
+                return;
+            _updateCheckRunning = true;
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                UpdateInfo info = null;
+                string error = null;
+                try { info = Updater.CheckForUpdate(); }
+                catch (Exception ex) { error = ex.Message; }
+
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        _updateCheckRunning = false;
+                        HandleUpdateCheckResult(info, error, userInitiated);
+                    });
+                }
+                catch
+                {
+                    _updateCheckRunning = false;
+                }
+            });
+        }
+
+        private void HandleUpdateCheckResult(UpdateInfo info, string error, bool userInitiated)
+        {
+            if (error != null)
+            {
+                if (userInitiated)
+                    MessageBox.Show(this, error, "m\u00E6la update", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (info == null)
+            {
+                if (userInitiated)
+                    MessageBox.Show(this, "You are running the latest version (" + Updater.CurrentVersionText + ").", "m\u00E6la update", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (!userInitiated && String.Equals(_preferences.SkippedVersion, Updater.FormatVersion(info.Version), StringComparison.Ordinal))
+                return;
+
+            _pendingUpdate = info;
+            if (!Visible || WindowState == FormWindowState.Minimized)
+            {
+                // Running in the tray: don't pop a dialog over whatever the user is doing.
+                _notifyIcon.Visible = true;
+                _notifyIcon.BalloonTipTitle = "m\u00E6la " + Updater.FormatVersion(info.Version) + " is available";
+                _notifyIcon.BalloonTipText = "Click here to review and install the update.";
+                try { _notifyIcon.ShowBalloonTip(5000); } catch { }
+                return;
+            }
+
+            ShowPendingUpdate();
+        }
+
+        private void ShowPendingUpdate()
+        {
+            UpdateInfo info = _pendingUpdate;
+            if (info == null || _updateInstalling)
+                return;
+            _pendingUpdate = null;
+
+            bool inCall = _engine != null && _engine.IsRunning;
+            DialogResult choice;
+            using (UpdateDialog dialog = new UpdateDialog(info, inCall))
+                choice = dialog.ShowDialog(this);
+
+            if (choice == UpdateDialog.Skip)
+            {
+                _preferences.SkippedVersion = Updater.FormatVersion(info.Version);
+                PreferencesStore.Save(_preferences);
+                return;
+            }
+            if (choice != DialogResult.OK)
+                return;
+
+            if (!Updater.CanInstall(info))
+            {
+                OpenUrl(info.PageUrl);
+                return;
+            }
+
+            InstallUpdate(info);
+        }
+
+        private void InstallUpdate(UpdateInfo info)
+        {
+            _updateInstalling = true;
+            Cursor = Cursors.WaitCursor;
+            string previousTitle = Text;
+            Text = "m\u00E6la - downloading update " + Updater.FormatVersion(info.Version) + "...";
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string staged = null;
+                string error = null;
+                try { staged = Updater.DownloadAndVerify(info); }
+                catch (Exception ex) { error = ex.Message; }
+
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        Cursor = Cursors.Default;
+                        Text = previousTitle;
+                        if (error == null)
+                        {
+                            try
+                            {
+                                // Release the room, microphone and UPnP mapping before the new build starts.
+                                StopEngine();
+                                PreferencesStore.Save(_preferences);
+                                SavedRoomStore.Save(_savedRooms);
+                                Updater.InstallAndRestart(staged);
+                                _allowTrueClose = true;
+                                Close();
+                                return;
+                            }
+                            catch (UnauthorizedAccessException)
+                            {
+                                error = "m\u00E6la does not have permission to replace its own file in this folder. Move Maela.exe somewhere you can write to (for example your Desktop or Documents) or install the update manually.";
+                            }
+                            catch (Exception ex)
+                            {
+                                error = ex.Message;
+                            }
+                        }
+
+                        _updateInstalling = false;
+                        if (MessageBox.Show(this, error + "\r\n\r\nOpen the download page instead?", "m\u00E6la update failed", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                            OpenUrl(info.PageUrl);
+                    });
+                }
+                catch
+                {
+                    _updateInstalling = false;
+                }
+            });
+        }
+
+        private static void OpenUrl(string url)
+        {
+            if (String.IsNullOrEmpty(url) || !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                url = Updater.ReleasesPage;
+            try { Process.Start(url); } catch { }
         }
 
         private void MigrateLegacyRoomCodes()
@@ -782,10 +982,14 @@ namespace Maela
                 {
                     _engine.MicVolumePercent = _preferences.MicVolumePercent;
                     _engine.MasterVolumePercent = _preferences.MasterVolumePercent;
+                    _engine.EchoCancellation = _preferences.EchoCancellation;
                 }
                 Invalidate(true);
             }
+            bool checkNow = form.CheckForUpdatesRequested;
             form.Dispose();
+            if (checkNow)
+                CheckForUpdates(true);
         }
 
         private void ShowHostRoomDialog(SavedRoom existing)
@@ -959,6 +1163,7 @@ namespace Maela
             _engine.Muted = _muted;
             _engine.MicVolumePercent = _preferences.MicVolumePercent;
             _engine.MasterVolumePercent = _preferences.MasterVolumePercent;
+            _engine.EchoCancellation = _preferences.EchoCancellation;
         }
 
         private void LeaveClicked(object sender, EventArgs e)
@@ -1031,7 +1236,7 @@ namespace Maela
                         if (mapping.ExternalPort == localPort)
                             status = "Public UDP endpoint mapped with UPnP";
                         else
-                            status = "Public UDP endpoint mapped with UPnP";
+                            status = "Public UDP endpoint mapped with UPnP (router chose port " + mapping.ExternalPort + ")";
                     }
                     else
                         status = "Port not mapped automatically";
@@ -1675,6 +1880,7 @@ namespace Maela
             }
 
             _uiTimer.Stop();
+            _updateTimer.Stop();
             Interlocked.Increment(ref _presenceGeneration);
             StopEngine();
             PreferencesStore.Save(_preferences);
@@ -1690,6 +1896,8 @@ namespace Maela
             WindowState = FormWindowState.Normal;
             Activate();
             _notifyIcon.Visible = false;
+            if (_pendingUpdate != null)
+                BeginInvoke((MethodInvoker)ShowPendingUpdate);
         }
 
         private static string ValidateName(string value)
@@ -2009,6 +2217,9 @@ namespace Maela
         public uint OutputDeviceId = NativeMethods.WAVE_MAPPER;
         public int MicVolumePercent = 100;
         public int MasterVolumePercent = 100;
+        public bool EchoCancellation = true;
+        public bool AutoUpdate = true;
+        public string SkippedVersion = String.Empty;
 
         public AppPreferences Clone()
         {
@@ -2018,6 +2229,9 @@ namespace Maela
             p.OutputDeviceId = OutputDeviceId;
             p.MicVolumePercent = MicVolumePercent;
             p.MasterVolumePercent = MasterVolumePercent;
+            p.EchoCancellation = EchoCancellation;
+            p.AutoUpdate = AutoUpdate;
+            p.SkippedVersion = SkippedVersion;
             return p;
         }
     }
@@ -2072,6 +2286,18 @@ namespace Maela
                     {
                         int v; if (Int32.TryParse(value, out v)) p.MasterVolumePercent = Clamp(v, 0, 150);
                     }
+                    else if (key == "aec")
+                    {
+                        p.EchoCancellation = value != "0";
+                    }
+                    else if (key == "updates")
+                    {
+                        p.AutoUpdate = value != "0";
+                    }
+                    else if (key == "skip")
+                    {
+                        p.SkippedVersion = value.Trim();
+                    }
                 }
             }
             catch { }
@@ -2093,7 +2319,10 @@ namespace Maela
                     "in=" + p.InputDeviceId,
                     "out=" + p.OutputDeviceId,
                     "mic=" + p.MicVolumePercent,
-                    "master=" + p.MasterVolumePercent
+                    "master=" + p.MasterVolumePercent,
+                    "aec=" + (p.EchoCancellation ? "1" : "0"),
+                    "updates=" + (p.AutoUpdate ? "1" : "0"),
+                    "skip=" + (p.SkippedVersion == null ? String.Empty : p.SkippedVersion.Trim())
                 });
             }
             catch { }
@@ -2550,18 +2779,24 @@ namespace Maela
         private readonly Label _micText = new Label();
         private readonly Label _masterText = new Label();
         private readonly Label _network = new Label();
+        private readonly CheckBox _echo = new CheckBox();
+        private readonly CheckBox _autoUpdate = new CheckBox();
         private readonly VoipEngine _engine;
         private AppPreferences _preferences;
+        private bool _checkForUpdates;
 
         public AppPreferences Preferences { get { return _preferences; } }
+
+        /// <summary>True when the user closed the dialog with "Check for updates".</summary>
+        public bool CheckForUpdatesRequested { get { return _checkForUpdates; } }
 
         public SettingsForm(AppPreferences current, VoipEngine engine, string publicIp, string invite, string natStatus)
         {
             _engine = engine;
             _preferences = current == null ? new AppPreferences() : current.Clone();
             Text = "m\u00E6la Settings";
-            ClientSize = new Size(690, 520);
-            MinimumSize = new Size(620, 500);
+            ClientSize = new Size(690, 640);
+            MinimumSize = new Size(620, 600);
             StartPosition = FormStartPosition.CenterParent;
             BackColor = Color.FromArgb(49, 51, 56);
             ForeColor = Color.FromArgb(242, 243, 245);
@@ -2586,15 +2821,24 @@ namespace Maela
             _master.Location = new Point(348, 292); _master.Size = new Size(250, 35); _master.Minimum = 0; _master.Maximum = 150; _master.Value = Clamp(_preferences.MasterVolumePercent, 0, 150); _master.TickStyle = TickStyle.None; _master.BackColor = BackColor; _master.ValueChanged += delegate { _masterText.Text = _master.Value + "%"; }; Controls.Add(_master);
             _masterText.Text = _master.Value + "%"; _masterText.ForeColor = Color.FromArgb(181,186,193); _masterText.AutoSize = true; _masterText.Location = new Point(602, 298); Controls.Add(_masterText);
 
-            Label networkHeader = MakeLabel("NETWORK", 8F, FontStyle.Bold, Color.FromArgb(148,155,164)); networkHeader.Location = new Point(26, 350); Controls.Add(networkHeader);
-            _network.AutoSize = false; _network.Location = new Point(26, 374); _network.Size = new Size(410, 70); _network.ForeColor = Color.FromArgb(181,186,193); _network.Text = "Public endpoint: " + (String.IsNullOrWhiteSpace(publicIp) ? "Not checked" : "Detected") + "\r\n" + (String.IsNullOrWhiteSpace(natStatus) ? "Network idle" : natStatus) + "\r\nRoom code: " + (String.IsNullOrWhiteSpace(invite) ? "None" : invite); Controls.Add(_network);
+            StyleCheck(_echo, "Echo cancellation - stops friends hearing themselves through your speakers");
+            _echo.Location = new Point(26, 336); _echo.Checked = _preferences.EchoCancellation; Controls.Add(_echo);
 
-            Button firewall = MakeButton("Allow through Firewall", false); firewall.Location = new Point(470, 370); firewall.Size = new Size(182, 34); firewall.Click += FirewallClicked; Controls.Add(firewall);
-            Button clearBans = MakeButton("Clear session bans", false); clearBans.Location = new Point(470, 412); clearBans.Size = new Size(182, 34); clearBans.Enabled = engine != null && engine.IsHost && engine.BanCount > 0; clearBans.Click += delegate { if (_engine != null) { _engine.ClearBans(); clearBans.Enabled = false; } }; Controls.Add(clearBans);
+            Label networkHeader = MakeLabel("NETWORK", 8F, FontStyle.Bold, Color.FromArgb(148,155,164)); networkHeader.Location = new Point(26, 384); Controls.Add(networkHeader);
+            _network.AutoSize = false; _network.Location = new Point(26, 408); _network.Size = new Size(410, 70); _network.ForeColor = Color.FromArgb(181,186,193); _network.Text = "Public endpoint: " + (String.IsNullOrWhiteSpace(publicIp) ? "Not checked" : "Detected") + "\r\n" + (String.IsNullOrWhiteSpace(natStatus) ? "Network idle" : natStatus) + "\r\nRoom code: " + (String.IsNullOrWhiteSpace(invite) ? "None" : invite); Controls.Add(_network);
 
-            Label note = MakeLabel("Input/output device changes apply the next time you connect.", 8F, FontStyle.Regular, Color.FromArgb(148,155,164)); note.Location = new Point(26, 455); Controls.Add(note);
+            Button firewall = MakeButton("Allow through Firewall", false); firewall.Location = new Point(470, 404); firewall.Size = new Size(182, 34); firewall.Click += FirewallClicked; Controls.Add(firewall);
+            Button clearBans = MakeButton("Clear session bans", false); clearBans.Location = new Point(470, 446); clearBans.Size = new Size(182, 34); clearBans.Enabled = engine != null && engine.IsHost && engine.BanCount > 0; clearBans.Click += delegate { if (_engine != null) { _engine.ClearBans(); clearBans.Enabled = false; } }; Controls.Add(clearBans);
 
-            Button close = MakeButton("Save & Close", true); close.Location = new Point(520, 470); close.Size = new Size(132, 34); close.Click += SaveClicked; Controls.Add(close); AcceptButton = close;
+            Label updatesHeader = MakeLabel("UPDATES", 8F, FontStyle.Bold, Color.FromArgb(148,155,164)); updatesHeader.Location = new Point(26, 498); Controls.Add(updatesHeader);
+            Label version = MakeLabel("m\u00E6la " + Updater.CurrentVersionText, 9F, FontStyle.Regular, Color.FromArgb(181,186,193)); version.Location = new Point(26, 522); Controls.Add(version);
+            StyleCheck(_autoUpdate, "Check GitHub for new releases automatically");
+            _autoUpdate.Location = new Point(26, 546); _autoUpdate.Checked = _preferences.AutoUpdate; Controls.Add(_autoUpdate);
+            Button checkUpdates = MakeButton("Check for updates", false); checkUpdates.Location = new Point(470, 518); checkUpdates.Size = new Size(182, 34); checkUpdates.Click += delegate { _checkForUpdates = true; SaveClicked(checkUpdates, EventArgs.Empty); }; Controls.Add(checkUpdates);
+
+            Label note = MakeLabel("Input/output device changes apply the next time you connect.", 8F, FontStyle.Regular, Color.FromArgb(148,155,164)); note.Location = new Point(26, 597); Controls.Add(note);
+
+            Button close = MakeButton("Save & Close", true); close.Location = new Point(520, 590); close.Size = new Size(132, 34); close.Click += SaveClicked; Controls.Add(close); AcceptButton = close;
         }
 
         private void SaveClicked(object sender, EventArgs e)
@@ -2605,6 +2849,10 @@ namespace Maela
             AudioDeviceItem output = _output.SelectedItem as AudioDeviceItem; if (output != null) _preferences.OutputDeviceId = output.Id;
             _preferences.MicVolumePercent = _mic.Value;
             _preferences.MasterVolumePercent = _master.Value;
+            _preferences.EchoCancellation = _echo.Checked;
+            if (_autoUpdate.Checked && !_preferences.AutoUpdate)
+                _preferences.SkippedVersion = String.Empty;
+            _preferences.AutoUpdate = _autoUpdate.Checked;
             DialogResult = DialogResult.OK;
             Close();
         }
@@ -2647,6 +2895,7 @@ namespace Maela
         private void AddField(string text, int x, int y) { Label l = MakeLabel(text, 8.5F, FontStyle.Regular, Color.FromArgb(181,186,193)); l.Location = new Point(x,y); Controls.Add(l); }
         private static Label MakeLabel(string text, float size, FontStyle style, Color color) { Label l = new Label(); l.Text=text; l.AutoSize=true; l.Font=new Font("Segoe UI",size,style); l.ForeColor=color; return l; }
         private static void StyleText(TextBox t) { t.BackColor=Color.FromArgb(30,31,34); t.ForeColor=Color.White; t.BorderStyle=BorderStyle.FixedSingle; }
+        private static void StyleCheck(CheckBox c, string text) { c.Text=text; c.AutoSize=true; c.ForeColor=Color.FromArgb(219,222,225); c.BackColor=Color.Transparent; c.FlatStyle=FlatStyle.Flat; c.Cursor=Cursors.Hand; }
         private static void StyleCombo(ComboBox c) { c.DropDownStyle=ComboBoxStyle.DropDownList; c.BackColor=Color.FromArgb(30,31,34); c.ForeColor=Color.White; c.FlatStyle=FlatStyle.Flat; }
         private static Button MakeButton(string text, bool primary) { Button b=new Button(); b.Text=text; b.FlatStyle=FlatStyle.Flat; b.FlatAppearance.BorderSize=primary?0:1; b.BackColor=primary?Color.FromArgb(88,101,242):Color.FromArgb(43,45,49); b.ForeColor=Color.White; return b; }
         private static int Clamp(int value,int min,int max) { if(value<min)return min; if(value>max)return max; return value; }
@@ -3031,6 +3280,10 @@ namespace Maela
         private readonly List<NativeBuffer> _captureBuffers = new List<NativeBuffer>();
         private readonly uint _inputDeviceId;
         private readonly uint _outputDeviceId;
+        private readonly FarEndReference _farEnd = new FarEndReference();
+        private readonly EchoCanceller _echoCanceller;
+        private volatile bool _echoCancellation = true;
+        private volatile bool _echoResetPending;
 
         private Socket _socket;
         private Thread _receiveThread;
@@ -3068,6 +3321,21 @@ namespace Maela
         public bool IsInVoice { get { return IsConnected && _localChannelId > 0; } }
         public int LocalChannelId { get { return _localChannelId; } }
         public bool Muted { get { return _muted; } set { _muted = value; } }
+
+        /// <summary>Removes speaker audio that leaks back into the microphone.</summary>
+        public bool EchoCancellation
+        {
+            get { return _echoCancellation; }
+            set
+            {
+                if (value && !_echoCancellation)
+                    _echoResetPending = true;
+                _echoCancellation = value;
+            }
+        }
+
+        /// <summary>Estimated speaker-to-microphone delay in milliseconds, or -1 while unknown.</summary>
+        public int EchoDelayMs { get { return _echoCancellation ? _echoCanceller.EstimatedDelayMs : -1; } }
         public long TxPackets { get { return Interlocked.Read(ref _txPackets); } }
         public long RxPackets { get { return Interlocked.Read(ref _rxPackets); } }
         public string LastMessage { get { lock (_stateLock) { return _lastMessage; } } }
@@ -3127,6 +3395,7 @@ namespace Maela
         {
             _inputDeviceId = inputDeviceId;
             _outputDeviceId = outputDeviceId;
+            _echoCanceller = new EchoCanceller(_farEnd);
         }
 
         public string GetChannelName(int channelId)
@@ -4176,6 +4445,10 @@ namespace Maela
 
             WAVEHDR header = (WAVEHDR)Marshal.PtrToStructure(headerPtr, typeof(WAVEHDR));
 
+            // The capture clock must advance for every frame, muted or not, so the echo
+            // canceller's view of the speaker timeline stays aligned with the microphone.
+            long captureEnd = header.dwBytesRecorded > 0 ? _farEnd.AdvanceCapture((int)header.dwBytesRecorded / 2) : _farEnd.CaptureClock;
+
             if (_running && !_muted && header.dwBytesRecorded > 0)
             {
                 int audioLength = (int)header.dwBytesRecorded;
@@ -4183,6 +4456,22 @@ namespace Maela
                 {
                     byte[] pcm = new byte[audioLength];
                     Marshal.Copy(header.lpData, pcm, 0, audioLength);
+                    if (_echoCancellation)
+                    {
+                        try
+                        {
+                            if (_echoResetPending)
+                            {
+                                _echoResetPending = false;
+                                _echoCanceller.Reset();
+                            }
+                            _echoCanceller.Process(pcm, captureEnd);
+                        }
+                        catch
+                        {
+                            // Never let audio processing take the microphone down.
+                        }
+                    }
                     ScalePcm16InPlace(pcm, _micVolumePercent / 100.0f);
                     if (HasVoiceActivity(pcm))
                     {
@@ -4244,7 +4533,7 @@ namespace Maela
                 {
                     try
                     {
-                        stream = new PlaybackStream(CreateFormat(), _outputDeviceId);
+                        stream = new PlaybackStream(CreateFormat(), _outputDeviceId, _farEnd);
                         _playbackStreams[senderId] = stream;
                         stream.SetGain(GetEffectivePlaybackGainLocked(senderId));
                     }
@@ -4610,9 +4899,12 @@ namespace Maela
         private int _outstandingFrames;
         private int _frameBytes;
         private volatile float _gain = 1.0f;
+        private readonly FarEndReference _reference;
+        private long _renderPosition;
 
-        public PlaybackStream(WAVEFORMATEX format, uint outputDeviceId)
+        public PlaybackStream(WAVEFORMATEX format, uint outputDeviceId, FarEndReference reference)
         {
+            _reference = reference;
             _frameBytes = (int)(format.nAvgBytesPerSec / 100);
             _waveOutProc = WaveOutCallback;
             int result = NativeMethods.waveOutOpen(out _waveOut, outputDeviceId, ref format, _waveOutProc, IntPtr.Zero, NativeMethods.CALLBACK_FUNCTION);
@@ -4685,17 +4977,14 @@ namespace Maela
             int headerSize = Marshal.SizeOf(typeof(WAVEHDR));
             NativeBuffer buffer = new NativeBuffer(pcm.Length, headerSize);
             float gain = _gain;
-            if (Math.Abs(gain - 1.0f) < 0.001f)
+            byte[] played = pcm;
+            if (Math.Abs(gain - 1.0f) >= 0.001f)
             {
-                Marshal.Copy(pcm, 0, buffer.Data, pcm.Length);
+                played = new byte[pcm.Length];
+                Buffer.BlockCopy(pcm, 0, played, 0, pcm.Length);
+                ScalePcm16InPlace(played, gain);
             }
-            else
-            {
-                byte[] adjusted = new byte[pcm.Length];
-                Buffer.BlockCopy(pcm, 0, adjusted, 0, pcm.Length);
-                ScalePcm16InPlace(adjusted, gain);
-                Marshal.Copy(adjusted, 0, buffer.Data, adjusted.Length);
-            }
+            Marshal.Copy(played, 0, buffer.Data, played.Length);
             buffer.WaveHandle = _waveOut;
 
             int result = NativeMethods.waveOutPrepareHeader(_waveOut, buffer.Header, (uint)headerSize);
@@ -4713,6 +5002,16 @@ namespace Maela
                     try { NativeMethods.waveOutUnprepareHeader(buffer.WaveHandle, buffer.Header, (uint)headerSize); } catch { }
                     buffer.Free();
                     return;
+                }
+                if (_reference != null)
+                {
+                    // WinMM plays queued buffers back to back. When the queue has drained the
+                    // next buffer starts "now", so re-anchor to the capture clock.
+                    long now = _reference.CaptureClock;
+                    if (_outstandingFrames == 0 || _renderPosition < now)
+                        _renderPosition = now;
+                    _reference.Write(_renderPosition, played);
+                    _renderPosition += played.Length / 2;
                 }
                 _buffers[buffer.Header] = buffer;
                 _outstandingFrames++;

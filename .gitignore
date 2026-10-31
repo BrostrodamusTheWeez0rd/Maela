@@ -1,6 +1,7 @@
 # Build output
 dist/
 release/
+obj/
 *.exe
 *.pdb
 *.zip

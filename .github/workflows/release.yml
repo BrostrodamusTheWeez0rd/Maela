@@ -1,12 +1,25 @@
 name: Release
 
+# Publishing a release is what makes installed copies of mæla auto-update.
+#
+# Two ways to ship:
+#   1. Bump VERSION (and CHANGELOG.md) and push to main. A release vX.Y.Z is
+#      created automatically if it does not exist yet.
+#   2. Push a tag vX.Y.Z by hand. It must match VERSION.
+
 on:
   push:
-    tags:
-      - "v*"
+    branches: [ "main" ]
+    paths: [ "VERSION" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -16,23 +29,75 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Maela
-        shell: cmd
-        run: scripts\build_ci.cmd
-
-      - name: Verify executable exists
-        shell: pwsh
-        run: |
-          if (!(Test-Path "dist/Maela.exe")) {
-            throw "dist/Maela.exe was not created"
-          }
-
-      - name: Create GitHub Release
+      - name: Resolve version
+        id: version
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" `
+          $version = (Get-Content VERSION -TotalCount 1).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION must look like 1.2.3 but was '$version'" }
+          $tag = "v$version"
+
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne $tag) {
+            throw "Tag ${{ github.ref_name }} does not match VERSION ($version). Update VERSION first."
+          }
+
+          gh release view $tag *> $null
+          $exists = $LASTEXITCODE -eq 0
+          $global:LASTEXITCODE = 0
+          if ($exists) { Write-Host "Release $tag already exists - nothing to publish." }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+
+      - name: Build Maela
+        if: steps.version.outputs.exists != 'true'
+        shell: cmd
+        run: scripts\build_ci.cmd
+
+      - name: Verify executable and write checksum
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          if (!(Test-Path "dist/Maela.exe")) { throw "dist/Maela.exe was not created" }
+          $built = [System.Reflection.AssemblyName]::GetAssemblyName((Resolve-Path "dist/Maela.exe")).Version
+          $expected = [version]"${{ steps.version.outputs.version }}.0"
+          if ($built -ne $expected) { throw "Built exe reports $built, expected $expected" }
+          $hash = (Get-FileHash "dist/Maela.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText("dist/Maela.exe.sha256", "$hash  Maela.exe`n")
+          Write-Host "SHA-256: $hash"
+
+      - name: Extract release notes from CHANGELOG
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $lines = Get-Content CHANGELOG.md
+          $notes = New-Object System.Collections.Generic.List[string]
+          $inSection = $false
+          foreach ($line in $lines) {
+            if ($line -match '^##\s+(\S+)') {
+              if ($inSection) { break }
+              $inSection = ($Matches[1] -eq $version)
+              continue
+            }
+            if ($inSection) { $notes.Add($line) }
+          }
+          $text = ($notes -join "`n").Trim()
+          if ($text.Length -eq 0) { $text = "mæla $version" }
+          [System.IO.File]::WriteAllText("release-notes.md", $text + "`n")
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" `
             "dist/Maela.exe#Maela.exe" `
-            --title "Maela ${{ github.ref_name }}" `
-            --generate-notes
+            "dist/Maela.exe.sha256#Maela.exe.sha256" `
+            --target "${{ github.sha }}" `
+            --title "mæla ${{ steps.version.outputs.tag }}" `
+            --notes-file release-notes.md

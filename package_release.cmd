@@ -5,7 +5,8 @@ cd /d "%~dp0"
 call scripts\build_ci.cmd
 if errorlevel 1 exit /b 1
 
-set /p VERSION=<VERSION
+set "VERSION="
+for /f "usebackq tokens=1 delims= " %%v in ("VERSION") do if not defined VERSION set "VERSION=%%v"
 if not exist "release" mkdir "release"
 if exist "release\Maela-v%VERSION%-windows.zip" del /q "release\Maela-v%VERSION%-windows.zip"
 
