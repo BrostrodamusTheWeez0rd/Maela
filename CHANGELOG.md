@@ -21,6 +21,8 @@
   silent. The first 60 ms before you speak are still sent, so words aren't clipped.
 - **Key clicks under your voice are turned down** by the noise filter (about 15 dB), without
   changing how your voice sounds.
+- **mæla is now open source under the MIT License.** Settings > Licenses shows it alongside
+  the third-party notices, and releases include `LICENSE.txt`.
 - Fixed: the "+" button for creating channels was positioned off-screen.
 
 ## 0.7.0 - New look, Encryption, Opus, Chat, Echo Cancellation & Auto-Update

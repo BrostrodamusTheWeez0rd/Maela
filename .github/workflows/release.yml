@@ -99,6 +99,7 @@ jobs:
             "dist/Maela.exe#Maela.exe" `
             "dist/Maela.exe.sha256#Maela.exe.sha256" `
             "dist/THIRD_PARTY_NOTICES.txt#THIRD_PARTY_NOTICES.txt" `
+            "dist/LICENSE#LICENSE.txt" `
             --target "${{ github.sha }}" `
             --title "mæla ${{ steps.version.outputs.tag }}" `
             --notes-file release-notes.md

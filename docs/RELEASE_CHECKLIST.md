@@ -35,4 +35,11 @@ Before tagging a public build:
 - [ ] Reactions, the emoji picker and search work; colour emoji show in chat.
 - [ ] Deafen silences everyone and shows the deafened icon to others; ping shows in the voice card.
 - [ ] Sound effects play at a comfortable level and can be turned off.
+- [ ] Typing on a keyboard near the mic is not heard by others (nothing sent while only typing).
+- [ ] Closing the window sends mæla to the tray and keeps you in voice; the tray menu mutes,
+      deafens, leaves and quits; the Settings toggle turns this off.
+- [ ] Launching mæla a second time brings the running copy forward instead of opening another.
+- [ ] Ending mæla from Task Manager and reopening it rejoins at once, in the same channel,
+      without a duplicate of you in the member list.
+- [ ] Settings > Licenses shows the MIT license and third-party notices.
 - [ ] `package_release.cmd` produces the expected release ZIP.

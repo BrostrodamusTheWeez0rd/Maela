@@ -1,5 +1,8 @@
 # Contributing
 
+mæla is MIT licensed (see `LICENSE`). By contributing you agree that your contribution is
+released under the same license.
+
 mæla is currently a compact single-source Windows application while the core architecture is still moving quickly.
 
 For changes:

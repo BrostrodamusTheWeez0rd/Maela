@@ -481,7 +481,7 @@ namespace Maela
             Controls.Add(check);
             FlatButton licenses = new FlatButton();
             licenses.Look = ButtonLook.Ghost;
-            licenses.Text = "Third-party licenses";
+            licenses.Text = "Licenses";
             licenses.SetBounds(Margin_X - 8, Cursor_Y, 170, 30);
             licenses.Click += delegate { ShowLicenses(); };
             Controls.Add(licenses);
@@ -672,20 +672,27 @@ namespace Maela
             }
         }
 
-        private void ShowLicenses()
+        private static string ReadResource(string name, string fallback)
         {
-            string text = "mæla includes the Opus audio codec (Concentus C# port), BSD 3-clause license.";
             try
             {
-                using (System.IO.Stream stream = typeof(SettingsForm).Assembly.GetManifestResourceStream("THIRD_PARTY_NOTICES.txt"))
+                using (System.IO.Stream stream = typeof(SettingsForm).Assembly.GetManifestResourceStream(name))
                 {
                     if (stream != null)
                         using (System.IO.StreamReader reader = new System.IO.StreamReader(stream, System.Text.Encoding.UTF8))
-                            text = reader.ReadToEnd();
+                            return reader.ReadToEnd();
                 }
             }
             catch { }
-            using (ThemedDialog form = new ThemedDialog("Third-party licenses", 640, 480))
+            return fallback;
+        }
+
+        private void ShowLicenses()
+        {
+            string text = ReadResource("LICENSE.txt", "mæla is released under the MIT License.")
+                + "\n\n==============================================================================\n\n"
+                + ReadResource("THIRD_PARTY_NOTICES.txt", "mæla includes the Opus audio codec (Concentus C# port), BSD 3-clause license.");
+            using (ThemedDialog form = new ThemedDialog("Licenses", 640, 480))
             {
                 TextBox box = new TextBox();
                 box.Multiline = true;

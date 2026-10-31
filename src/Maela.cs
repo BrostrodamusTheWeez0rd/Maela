@@ -17,6 +17,7 @@ using System.Xml;
 [assembly: System.Reflection.AssemblyProduct("m\u00E6la")]
 [assembly: System.Reflection.AssemblyDescription("Private self-hosted voice rooms")]
 [assembly: System.Reflection.AssemblyCompany("m\u00E6la")]
+[assembly: System.Reflection.AssemblyCopyright("Copyright (c) 2026 BrostrodamusTheWeez0rd. MIT License.")]
 // AssemblyVersion / AssemblyFileVersion are generated from the VERSION file by scripts\build_ci.cmd.
 
 namespace Maela

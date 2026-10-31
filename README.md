@@ -6,7 +6,7 @@
 
 **mæla** is a lightweight self-hosted Windows voice-room app. One person hosts, friends join with a short room code, and the host relays voice directly without accounts or a permanent central service.
 
-Current release: **0.7.0**.
+Current release: **0.7.1**. Open source under the MIT License.
 
 ## Highlights
 
@@ -22,7 +22,7 @@ Current release: **0.7.0**.
 - Multiple voice channels inside a room, each with its own text chat
 - Discord-style sidebar showing who is in which channel, who's speaking, muted or deafened
 - Colour emoji, reactions, an emoji picker and message search
-- Mute, deafen, live ping, a background-noise filter and gentle sound effects
+- Mute, deafen, live ping, a background-noise and key-click filter, automatic mic level and gentle sound effects
 - Lobby state with no voice transmission
 - Runs in the system tray when closed (mute, deafen, leave or quit from the tray icon); hosts can keep the room online there
 - Per-user local volume and mute
@@ -31,6 +31,8 @@ Current release: **0.7.0**.
 - Host kick / session ban / move-to-channel controls
 - Input/output device selection
 - Embedded app, taskbar, title-bar and tray branding
+- Only one copy runs at a time; reopening mæla brings the running copy forward
+- Rejoins instantly after a crash or lost connection, back in the same channel
 - A single self-contained `.exe`: no installer, NuGet packages or runtime dependencies beyond Windows .NET Framework
 
 ## Join flow
@@ -155,6 +157,6 @@ See `docs/NETWORKING.md` for more detail.
 
 ## License
 
-No open-source license has been selected yet. See `LICENSE`.
+mæla is open source under the [MIT License](LICENSE). Copyright (c) 2026 BrostrodamusTheWeez0rd.
 
 mæla includes the Opus codec via [Concentus](https://github.com/lostromb/concentus) under the BSD 3-clause license. See `THIRD_PARTY_NOTICES.txt` (also viewable from Settings).

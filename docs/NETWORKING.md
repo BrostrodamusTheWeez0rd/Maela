@@ -68,11 +68,23 @@ Decrypted DATA contains the inner packets: join, welcome, peer list, keepalive, 
 reject, audio, channel switch and the chat packets. Receivers drop anything that fails
 authentication, arrives twice, or is older than the 1,024-packet replay window.
 
+### Leaving and coming back
+
+- Quitting sends LEAVE three times (UDP can drop one); mæla also sends it if it crashes.
+- If a client vanishes without LEAVE (Task Manager, power cut, lost Wi-Fi), the host drops it
+  after 10 seconds without packets.
+- If the same person comes back before then (a JOIN from the same IP address with the same
+  display name, on a new or the same port), the host replaces the stale entry at once instead
+  of listing them twice.
+- WELCOME carries the channel to enter (4 bytes): the member's previous channel when they are
+  coming back, otherwise #1. Older clients ignore it and join #1.
+
 ## Voice
 
 - Opus at 48 kHz mono, 20 ms frames, 32 kbps VBR, with in-band forward error correction.
-- Silence detection with an adaptive noise floor: nothing is sent while you are quiet. A
-  400 ms tail and one frame of pre-roll keep word starts and ends intact.
+- Voice detection: a frame is sent only if it is loud enough (adaptive noise floor) *and*
+  pitched like a voice (autocorrelation, 70–400 Hz), so typing, clicks and bumps alone send
+  nothing. A 400 ms tail and 60 ms of pre-roll keep word starts and ends intact.
 - Receivers rebuild one or two lost packets from FEC or concealment, and keep a 40 ms jitter
   buffer at the start of each burst of speech, capped at 200 ms of queued audio.
 - About 55–65 kbps per active speaker including all headers, versus ~800 kbps for the old
