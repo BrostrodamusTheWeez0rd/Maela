@@ -253,6 +253,7 @@ namespace Maela
         public bool NoiseSuppression = true;
         public bool SetupDone;
         public bool SoundEffects = true;
+        public bool AutoGain = true;
 
         public AppPreferences Clone()
         {
@@ -269,6 +270,7 @@ namespace Maela
             p.NoiseSuppression = NoiseSuppression;
             p.SetupDone = SetupDone;
             p.SoundEffects = SoundEffects;
+            p.AutoGain = AutoGain;
             return p;
         }
     }
@@ -351,6 +353,10 @@ namespace Maela
                     {
                         p.SoundEffects = value != "0";
                     }
+                    else if (key == "agc")
+                    {
+                        p.AutoGain = value != "0";
+                    }
                 }
             }
             catch { }
@@ -379,7 +385,8 @@ namespace Maela
                     "theme=" + (p.Theme ?? "maela-red"),
                     "noise=" + (p.NoiseSuppression ? "1" : "0"),
                     "setup=" + (p.SetupDone ? "1" : "0"),
-                    "sfx=" + (p.SoundEffects ? "1" : "0")
+                    "sfx=" + (p.SoundEffects ? "1" : "0"),
+                    "agc=" + (p.AutoGain ? "1" : "0")
                 });
             }
             catch { }
@@ -2334,6 +2341,7 @@ namespace Maela
                 }
             }
             ApplyNoiseSuppression(pcm);
+            ApplyAutoGain(pcm);
             ScalePcm16InPlace(pcm, _micVolumePercent / 100.0f);
 
             List<EncodedVoice> packets = _encodedScratch;

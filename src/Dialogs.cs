@@ -378,6 +378,7 @@ namespace Maela
         private readonly ToggleSwitch _echo;
         private readonly ToggleSwitch _noise;
         private readonly ToggleSwitch _sounds;
+        private readonly ToggleSwitch _agc;
         private readonly ToggleSwitch _autoUpdate;
         private readonly Label _downloadStatus = new Label();
         private readonly FlatButton _repair = new FlatButton();
@@ -434,6 +435,7 @@ namespace Maela
             Cursor_Y += 44;
             _echo = AddToggle("Echo cancellation", "Stops friends hearing themselves through your speakers.", _preferences.EchoCancellation);
             _noise = AddToggle("Noise filter", "Removes steady background noise like fans, hum and hiss.", _preferences.NoiseSuppression);
+            _agc = AddToggle("Automatic mic level", "Evens out your volume so friends hear you clearly.", _preferences.AutoGain);
             _sounds = AddToggle("Sound effects", "Chimes for joining, leaving, mute, deafen and new messages.", _preferences.SoundEffects);
 
             AddSection("Downloads");
@@ -577,6 +579,7 @@ namespace Maela
             _preferences.EchoCancellation = _echo.Checked;
             _preferences.NoiseSuppression = _noise.Checked;
             _preferences.SoundEffects = _sounds.Checked;
+            _preferences.AutoGain = _agc.Checked;
             if (_autoUpdate.Checked && !_preferences.AutoUpdate)
                 _preferences.SkippedVersion = String.Empty;
             _preferences.AutoUpdate = _autoUpdate.Checked;

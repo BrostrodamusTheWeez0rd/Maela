@@ -43,6 +43,13 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Automatic mic level ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\AutoGainTests.exe" "tests\AutoGainTests.cs" "src\AutoGain.cs"
+if errorlevel 1 exit /b 1
+"obj\AutoGainTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Sound effects ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\SoundTests.exe" "tests\SoundTests.cs" "src\SoundFx.cs"
 if errorlevel 1 exit /b 1

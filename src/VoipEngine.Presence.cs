@@ -22,6 +22,8 @@ namespace Maela
 
         private readonly Dictionary<uint, byte> _memberFlags = new Dictionary<uint, byte>();
         private readonly NoiseSuppressor _noiseSuppressor = new NoiseSuppressor();
+        private readonly AutoGain _autoGain = new AutoGain();
+        private volatile bool _autoGainEnabled = true;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private volatile bool _deafened;
         private volatile bool _noiseSuppression = true;
@@ -52,6 +54,21 @@ namespace Maela
                     _noiseResetPending = true;
                 _noiseSuppression = value;
             }
+        }
+
+        /// <summary>Evens out your mic level so quiet mics are heard clearly and loud ones don't blast.</summary>
+        public bool AutoGain
+        {
+            get { return _autoGainEnabled; }
+            set { _autoGainEnabled = value; }
+        }
+
+        private void ApplyAutoGain(byte[] pcm)
+        {
+            if (!_autoGainEnabled)
+                return;
+            try { _autoGain.Process(pcm); }
+            catch { }
         }
 
         /// <summary>Round-trip time to the host in milliseconds, or -1 if unknown (or you are the host).</summary>

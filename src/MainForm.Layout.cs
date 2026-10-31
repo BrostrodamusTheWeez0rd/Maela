@@ -117,11 +117,12 @@ namespace Maela
             _addChannelButton.Icon = IconKind.Plus;
             _addChannelButton.Size = new Size(26, 26);
             _addChannelButton.Radius = 7;
-            _addChannelButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _addChannelButton.Location = new Point(_sidebar.Width - 40, 11);
             _addChannelButton.Click += AddChannelClicked;
             _toolTip.SetToolTip(_addChannelButton, "Create channel");
             channelHead.Controls.Add(_addChannelButton);
+            // Position from the row's real width whenever it changes (it only gets its final
+            // width once docked, so a fixed position at build time can end up off-screen).
+            channelHead.Resize += delegate { _addChannelButton.Location = new Point(channelHead.Width - 38, 11); };
 
             _channels.Dock = DockStyle.Fill;
             _channels.BorderStyle = BorderStyle.None;

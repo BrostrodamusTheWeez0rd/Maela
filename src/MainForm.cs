@@ -792,6 +792,7 @@ namespace Maela
             _engine.MasterVolumePercent = _preferences.MasterVolumePercent;
             _engine.EchoCancellation = _preferences.EchoCancellation;
             _engine.NoiseSuppression = _preferences.NoiseSuppression;
+            _engine.AutoGain = _preferences.AutoGain;
         }
 
         private void LeaveClicked(object sender, EventArgs e)

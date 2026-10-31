@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 - Louder, clearer voices
+
+- **Automatic mic level** (on by default): quiet mics are boosted up to 24 dB and loud ones
+  brought down, so everyone is heard at a similar, clear level. Background noise is never
+  pumped up between words, and a soft limiter prevents clipping. Turn it off in
+  Settings > Voice & audio.
+- Fixed: the "+" button for creating channels was positioned off-screen.
+
 ## 0.7.0 - New look, Encryption, Opus, Chat, Echo Cancellation & Auto-Update
 
 > **Fresh install.** 0.7.0 can't talk to 0.6 or earlier. Everyone needs to download it once
