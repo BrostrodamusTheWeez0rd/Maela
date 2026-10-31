@@ -19,6 +19,10 @@
   `Maela.exe.sha256`, and uses the matching CHANGELOG section as release notes.
 - App version is now stamped from the `VERSION` file at build time.
 - Added an echo canceller regression test to CI.
+- Saved rooms are no longer probed every 5 seconds. Each joined room is checked once
+  when mæla starts (or when it is added). While you are connected, the room's status and
+  member count come from the live session. Right-click a room and choose
+  "Check if online" to refresh it by hand.
 
 ## 0.6.0 - Room Codes
 

@@ -102,7 +102,6 @@ namespace Maela
         private int _networkSetupGeneration;
         private int _presenceGeneration;
         private bool _presenceScanRunning;
-        private DateTime _nextPresenceScanUtc = DateTime.MinValue;
         private int _localBoundPort;
         private bool _muted;
         private bool _keepRoomAlive;
@@ -850,6 +849,14 @@ namespace Maela
             action.Click += delegate { StartSelectedRoom(); };
             _roomMenu.Items.Add(action);
 
+            if (!room.Owned)
+            {
+                ToolStripMenuItem recheck = new ToolStripMenuItem("Check if online");
+                recheck.Enabled = !_presenceScanRunning && !(_engine != null && _engine.IsRunning && Object.ReferenceEquals(room, _activeSavedRoom));
+                recheck.Click += delegate { RecheckRoomPresence(room); };
+                _roomMenu.Items.Add(recheck);
+            }
+
             ToolStripMenuItem copy = new ToolStripMenuItem("Copy room code");
             copy.Enabled = RoomCode.IsValid(room.Invite);
             copy.Click += delegate { CopyToClipboard(room.Invite); };
@@ -1399,11 +1406,67 @@ namespace Maela
                 }
             }
 
-            if (!_presenceScanRunning && DateTime.UtcNow >= _nextPresenceScanUtc)
-            {
-                _nextPresenceScanUtc = DateTime.UtcNow.AddSeconds(5);
+            RefreshLocalPresence();
+            if (!_presenceScanRunning)
                 BeginPresenceScan();
+        }
+
+        /// <summary>
+        /// Updates presence for rooms we already know about locally (the room we host or are
+        /// connected to). Never touches the network.
+        /// </summary>
+        private void RefreshLocalPresence()
+        {
+            bool changed = false;
+            bool engineUp = _engine != null && _engine.IsRunning;
+            int i;
+            for (i = 0; i < _savedRooms.Count; i++)
+            {
+                SavedRoom r = _savedRooms[i];
+                bool active = engineUp && Object.ReferenceEquals(r, _activeSavedRoom);
+                RoomPresence presence = r.Presence;
+                int members = r.MemberCount;
+                int max = r.MaxMembers;
+
+                if (active && (_engine.IsHost || _engine.IsConnected))
+                {
+                    // Live connection: the room's info comes from the session itself.
+                    presence = RoomPresence.Online;
+                    members = _engine.MemberCount;
+                    max = VoipEngine.MaxRoomMembers;
+                    r.PresenceChecked = true;
+                }
+                else if (r.Owned)
+                {
+                    presence = RoomPresence.Offline;
+                    members = 0;
+                }
+                else
+                    continue;
+
+                if (presence != r.Presence || members != r.MemberCount || max != r.MaxMembers)
+                {
+                    r.Presence = presence;
+                    r.MemberCount = members;
+                    r.MaxMembers = max;
+                    changed = true;
+                }
             }
+
+            if (changed)
+            {
+                _rooms.Invalidate();
+                UpdateSelectedRoomUi();
+            }
+        }
+
+        private void RecheckRoomPresence(SavedRoom room)
+        {
+            if (room == null || room.Owned)
+                return;
+            room.PresenceChecked = false;
+            if (!_presenceScanRunning)
+                BeginPresenceScan();
         }
 
         private void UpdateChannelRows(VoipEngine engine)
@@ -1479,64 +1542,62 @@ namespace Maela
             }
         }
 
+        /// <summary>
+        /// Probes each joined (not hosted) saved room once per session to show whether it is
+        /// online. Rooms are not re-probed afterwards; use "Check if online" to refresh one.
+        /// </summary>
         private void BeginPresenceScan()
         {
-            if (_savedRooms.Count == 0)
+            List<SavedRoom> pending = new List<SavedRoom>();
+            int i;
+            for (i = 0; i < _savedRooms.Count; i++)
+            {
+                SavedRoom r = _savedRooms[i];
+                if (r.Owned || r.PresenceChecked)
+                    continue;
+                if (_engine != null && _engine.IsRunning && Object.ReferenceEquals(r, _activeSavedRoom))
+                    continue; // Connected: info comes from the live session.
+                r.PresenceChecked = true;
+                r.Presence = RoomPresence.Checking;
+                pending.Add(r);
+            }
+            if (pending.Count == 0)
                 return;
 
             _presenceScanRunning = true;
             int generation = Interlocked.Increment(ref _presenceGeneration);
-            List<SavedRoom> snapshot = new List<SavedRoom>(_savedRooms);
-            int i;
-            for (i = 0; i < snapshot.Count; i++)
-            {
-                SavedRoom r = snapshot[i];
-                if (r.Owned)
-                {
-                    if (_engine != null && _engine.IsRunning && _engine.IsHost && Object.ReferenceEquals(r, _activeSavedRoom))
-                    {
-                        r.Presence = RoomPresence.Online;
-                        r.MemberCount = _engine.MemberCount;
-                        r.MaxMembers = VoipEngine.MaxRoomMembers;
-                    }
-                    else
-                    {
-                        r.Presence = RoomPresence.Offline;
-                        r.MemberCount = 0;
-                    }
-                }
-                else
-                    r.Presence = RoomPresence.Checking;
-            }
             _rooms.Invalidate();
             UpdateSelectedRoomUi();
 
             ThreadPool.QueueUserWorkItem(delegate
             {
+                List<ProbeResult> results = new List<ProbeResult>();
                 int j;
-                for (j = 0; j < snapshot.Count; j++)
-                {
-                    SavedRoom room = snapshot[j];
-                    if (room.Owned)
-                        continue;
-                    ProbeResult result = RoomProbe.Check(room.Invite, 700);
-                    room.Presence = result.Online ? RoomPresence.Online : RoomPresence.Offline;
-                    room.MemberCount = result.MemberCount;
-                    room.MaxMembers = result.MaxMembers;
-                    if (result.Online && !String.IsNullOrWhiteSpace(result.RoomName) && room.Name == "Voice Room")
-                        room.Name = result.RoomName;
-                }
+                for (j = 0; j < pending.Count; j++)
+                    results.Add(RoomProbe.Check(pending[j].Invite, 700));
 
                 try
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
-                        if (generation == _presenceGeneration)
+                        if (generation != _presenceGeneration)
+                            return;
+                        _presenceScanRunning = false;
+                        int k;
+                        for (k = 0; k < pending.Count; k++)
                         {
-                            _presenceScanRunning = false;
-                            _rooms.Invalidate();
-                            UpdateSelectedRoomUi();
+                            SavedRoom room = pending[k];
+                            if (_engine != null && _engine.IsRunning && Object.ReferenceEquals(room, _activeSavedRoom))
+                                continue; // Joined while the probe was in flight; the session is authoritative.
+                            ProbeResult result = results[k];
+                            room.Presence = result.Online ? RoomPresence.Online : RoomPresence.Offline;
+                            room.MemberCount = result.MemberCount;
+                            room.MaxMembers = result.MaxMembers;
+                            if (result.Online && !String.IsNullOrWhiteSpace(result.RoomName) && room.Name == "Voice Room")
+                                room.Name = result.RoomName;
                         }
+                        _rooms.Invalidate();
+                        UpdateSelectedRoomUi();
                     });
                 }
                 catch
@@ -1592,7 +1653,7 @@ namespace Maela
                 _voiceTitle.Text = "General";
                 _connectionStatus.Text = "Not connected";
                 _connectionStatus.ForeColor = TextMuted;
-                _networkLabel.Text = room == null ? "Network idle" : (room.Owned ? "Host this room to refresh its room code." : "Presence checks every few seconds.");
+                _networkLabel.Text = room == null ? "Network idle" : (room.Owned ? "Host this room to refresh its room code." : "Status is checked once when m\u00E6la starts. Right-click the room to check again.");
             }
         }
 
@@ -2104,6 +2165,9 @@ namespace Maela
         public RoomPresence Presence = RoomPresence.Unknown;
         public int MemberCount;
         public int MaxMembers;
+
+        /// <summary>Session-only: set once this room has been probed, so it is not probed again.</summary>
+        public bool PresenceChecked;
 
         public override string ToString()
         {

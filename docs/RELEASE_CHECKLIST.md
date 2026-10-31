@@ -7,7 +7,7 @@ Before tagging a public build:
 - [ ] Host creates a room code and does not display raw public IP/port in normal UI.
 - [ ] A second machine can join using only the room code.
 - [ ] A one-character room-code typo is rejected.
-- [ ] Saved rooms survive restart and presence status updates.
+- [ ] Saved rooms survive restart; each is probed once at startup (not repeatedly), and "Check if online" refreshes one.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.
 - [ ] Audio is only delivered inside the current voice channel.
