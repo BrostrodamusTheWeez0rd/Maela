@@ -37,9 +37,99 @@ namespace Maela
                     justUpdated = true;
             }
 
-            Updater.CleanupAfterUpdate();
-            Application.Run(new MainForm(justUpdated));
+            // One copy at a time: a second launch (say, from the Start menu while mæla sits in
+            // the tray) just brings the running one to the front. Right after an update the old
+            // copy may still be closing, so wait a moment for it.
+            using (SingleInstance instance = SingleInstance.Acquire(justUpdated ? 15000 : 0))
+            {
+                if (instance == null)
+                {
+                    SingleInstance.ShowRunningCopy();
+                    return;
+                }
+
+                // If mæla crashes, still tell the room we left so rejoining is instant.
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                Application.ThreadException += delegate(object s, System.Threading.ThreadExceptionEventArgs e)
+                {
+                    EmergencyLeave();
+                    MessageBox.Show("m\u00E6la ran into a problem and needs to close.\n\n" + e.Exception.Message, "m\u00E6la", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    Environment.Exit(1);
+                };
+                AppDomain.CurrentDomain.UnhandledException += delegate { EmergencyLeave(); };
+
+                Updater.CleanupAfterUpdate();
+                Application.Run(new MainForm(justUpdated));
+            }
         }
+
+        /// <summary>Set by the main window: leaves the room without touching the UI.</summary>
+        internal static Action LeaveRoomOnCrash;
+
+        private static void EmergencyLeave()
+        {
+            Action leave = LeaveRoomOnCrash;
+            LeaveRoomOnCrash = null;
+            if (leave != null)
+            {
+                try { leave(); } catch { }
+            }
+        }
+    }
+
+    /// <summary>Keeps mæla to one running copy per Windows user.</summary>
+    internal sealed class SingleInstance : IDisposable
+    {
+        private const string Name = "Local\\Maela-7d1f6a52-single-instance";
+        public static readonly int ShowMessage = RegisterWindowMessage("Maela-7d1f6a52-show");
+        private Mutex _mutex;
+
+        public static SingleInstance Acquire(int waitMs)
+        {
+            Mutex mutex;
+            try { mutex = new Mutex(false, Name); }
+            catch { return new SingleInstance(); } // Can't tell: don't block startup.
+            try
+            {
+                if (mutex.WaitOne(waitMs, false))
+                {
+                    SingleInstance instance = new SingleInstance();
+                    instance._mutex = mutex;
+                    return instance;
+                }
+            }
+            catch (AbandonedMutexException)
+            {
+                // The previous copy crashed while holding it; it's ours now.
+                SingleInstance instance = new SingleInstance();
+                instance._mutex = mutex;
+                return instance;
+            }
+            mutex.Close();
+            return null;
+        }
+
+        public static void ShowRunningCopy()
+        {
+            try { PostMessage(new IntPtr(0xFFFF), ShowMessage, IntPtr.Zero, IntPtr.Zero); } catch { }
+        }
+
+        public void Dispose()
+        {
+            Mutex mutex = _mutex;
+            _mutex = null;
+            if (mutex != null)
+            {
+                try { mutex.ReleaseMutex(); } catch { }
+                mutex.Close();
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int RegisterWindowMessage(string message);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
     }
 
     internal enum RoomPresence
@@ -254,6 +344,8 @@ namespace Maela
         public bool SetupDone;
         public bool SoundEffects = true;
         public bool AutoGain = true;
+        public bool CloseToTray = true;
+        public bool TrayHintShown;
 
         public AppPreferences Clone()
         {
@@ -271,6 +363,8 @@ namespace Maela
             p.SetupDone = SetupDone;
             p.SoundEffects = SoundEffects;
             p.AutoGain = AutoGain;
+            p.CloseToTray = CloseToTray;
+            p.TrayHintShown = TrayHintShown;
             return p;
         }
     }
@@ -357,6 +451,14 @@ namespace Maela
                     {
                         p.AutoGain = value != "0";
                     }
+                    else if (key == "tray")
+                    {
+                        p.CloseToTray = value != "0";
+                    }
+                    else if (key == "trayhint")
+                    {
+                        p.TrayHintShown = value == "1";
+                    }
                 }
             }
             catch { }
@@ -386,7 +488,9 @@ namespace Maela
                     "noise=" + (p.NoiseSuppression ? "1" : "0"),
                     "setup=" + (p.SetupDone ? "1" : "0"),
                     "sfx=" + (p.SoundEffects ? "1" : "0"),
-                    "agc=" + (p.AutoGain ? "1" : "0")
+                    "agc=" + (p.AutoGain ? "1" : "0"),
+                    "tray=" + (p.CloseToTray ? "1" : "0"),
+                    "trayhint=" + (p.TrayHintShown ? "1" : "0")
                 });
             }
             catch { }
@@ -1040,6 +1144,9 @@ namespace Maela
 
         /// <summary>Tests only: fraction (0-1) of outgoing packets to drop, to exercise retries.</summary>
         internal double PacketLossForTests { get; set; }
+
+        /// <summary>Tests only: client binds this local port (0 = any) to mimic a reused NAT mapping.</summary>
+        internal int LocalPortForTests { get; set; }
         private readonly Random _testLossRandom = new Random(1234);
 
         public bool IsRunning { get { return _running; } }
@@ -1555,7 +1662,9 @@ namespace Maela
             try
             {
                 CreateSocket();
-                _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+                _socket.Bind(new IPEndPoint(IPAddress.Any, LocalPortForTests));
+                IPEndPoint clientEndpoint = _socket.LocalEndPoint as IPEndPoint;
+                _boundPort = clientEndpoint == null ? 0 : clientEndpoint.Port;
                 if (!HeadlessForTests)
                     OpenWaveIn();
                 StartThreadsAndCapture();
@@ -1716,6 +1825,8 @@ namespace Maela
 
                 Participant participant = null;
                 bool added = false;
+                string ghostKey = null;
+                int rejoinChannel = 1;
 
                 lock (_stateLock)
                 {
@@ -1732,6 +1843,26 @@ namespace Maela
                     }
                     else
                     {
+                        // Someone who vanished without saying goodbye (crash, Task Manager, lost
+                        // connection) and comes straight back: drop the stale copy right away
+                        // instead of showing them twice until it times out.
+                        ghostKey = FindGhost(sender.Address, requestedName, key);
+                        if (ghostKey != null)
+                        {
+                            Participant ghost = _hostParticipants[ghostKey];
+                            if (ghost.ChannelId > 0 && _channels.ContainsKey(ghost.ChannelId))
+                                rejoinChannel = ghost.ChannelId;
+                        }
+                    }
+                }
+
+                if (ghostKey != null)
+                    RemoveHostParticipant(ghostKey, false);
+
+                lock (_stateLock)
+                {
+                    if (!_hostParticipants.TryGetValue(key, out participant))
+                    {
                         if (_memberNames.Count >= MaxRoomMembers)
                         {
                             SendPacketVia(viaPending, sender, PacketReject, 0, 0, Encoding.UTF8.GetBytes("Room is full (max " + MaxRoomMembers + ")."));
@@ -1743,7 +1874,7 @@ namespace Maela
                         participant.Name = requestedName;
                         participant.Endpoint = new IPEndPoint(sender.Address, sender.Port);
                         participant.LastSeenUtc = DateTime.UtcNow;
-                        participant.ChannelId = 1;
+                        participant.ChannelId = rejoinChannel;
                         _hostParticipants[key] = participant;
                         _memberNames[participant.Id] = participant.Name;
                         _memberChannels[participant.Id] = participant.ChannelId;
@@ -1752,11 +1883,15 @@ namespace Maela
                 }
 
                 AdoptSession(key, participant, viaPending);
-                SendPacket(participant.Endpoint, PacketWelcome, participant.Id, 0, new byte[0]);
+                // Tell the client which channel to (re)enter: the one it was in if it is coming back.
+                int welcomeChannel;
+                lock (_stateLock)
+                    welcomeChannel = participant.ChannelId > 0 && _channels.ContainsKey(participant.ChannelId) ? participant.ChannelId : 1;
+                SendPacket(participant.Endpoint, PacketWelcome, participant.Id, 0, BitConverter.GetBytes(welcomeChannel));
                 BroadcastPeerList();
 
                 if (added)
-                    SetLastMessage(participant.Name + " joined.");
+                    SetLastMessage(participant.Name + (ghostKey == null ? " joined." : " reconnected."));
                 return;
             }
 
@@ -1853,7 +1988,8 @@ namespace Maela
                 _connected = true;
                 _joinStartedUtc = DateTime.MinValue;
                 SetLastMessage(String.Empty);
-                RequestChannel(1);
+                int channel = packet.Payload != null && packet.Payload.Length >= 4 ? BitConverter.ToInt32(packet.Payload, 0) : 1;
+                RequestChannel(channel > 0 ? channel : 1);
                 return;
             }
 
@@ -1932,6 +2068,24 @@ namespace Maela
 
                 Thread.Sleep(250);
             }
+        }
+
+        /// <summary>
+        /// Host: an existing member at the same address (same home network) with the same name,
+        /// joining again from a new port. That is the same person after their old copy of mæla
+        /// went away without saying goodbye. Call with _stateLock held. Returns its key, or null.
+        /// </summary>
+        private string FindGhost(IPAddress address, string name, string exceptKey)
+        {
+            foreach (KeyValuePair<string, Participant> pair in _hostParticipants)
+            {
+                Participant p = pair.Value;
+                if (pair.Key == exceptKey || !p.Endpoint.Address.Equals(address))
+                    continue;
+                if (String.Equals(p.Name, name, StringComparison.Ordinal))
+                    return pair.Key;
+            }
+            return null;
         }
 
         private void HostMaintenance()
@@ -2732,12 +2886,11 @@ namespace Maela
         {
             if (!_isHost && _running && _connected && _hostEndpoint != null && _localId != 0)
             {
-                try
+                // UDP can drop a packet, so say goodbye three times; the host ignores repeats.
+                for (int attempt = 0; attempt < 3; attempt++)
                 {
-                    SendPacket(_hostEndpoint, PacketLeave, _localId, 0, new byte[0]);
-                }
-                catch
-                {
+                    try { SendPacket(_hostEndpoint, PacketLeave, _localId, 0, new byte[0]); }
+                    catch { }
                 }
             }
 

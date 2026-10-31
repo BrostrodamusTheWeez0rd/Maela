@@ -24,7 +24,7 @@ Current release: **0.7.0**.
 - Colour emoji, reactions, an emoji picker and message search
 - Mute, deafen, live ping, a background-noise filter and gentle sound effects
 - Lobby state with no voice transmission
-- Persistent-host mode that can keep the room server alive in the tray
+- Runs in the system tray when closed (mute, deafen, leave or quit from the tray icon); hosts can keep the room online there
 - Per-user local volume and mute
 - Built-in acoustic echo cancellation, so speakers work without a headset
 - Automatic updates from GitHub Releases, verified by SHA-256

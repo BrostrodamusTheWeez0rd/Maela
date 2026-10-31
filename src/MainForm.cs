@@ -78,21 +78,20 @@ namespace Maela
             _uiTimer.Tick += UiTimerTick;
             _uiTimer.Start();
             FormClosing += MainFormClosing;
+            Program.LeaveRoomOnCrash = delegate
+            {
+                VoipEngine engine = _engine;
+                if (engine != null)
+                    engine.Dispose();
+            };
 
             _notifyIcon.Text = "m\u00E6la";
             try { _notifyIcon.Icon = Branding.LoadAppIcon(); } catch { _notifyIcon.Icon = SystemIcons.Application; }
-            _notifyIcon.Visible = false;
-            _notifyIcon.DoubleClick += delegate { RestoreFromTray(); };
+            _notifyIcon.Visible = true;
+            _notifyIcon.MouseClick += delegate(object s, MouseEventArgs me) { if (me.Button == MouseButtons.Left) RestoreFromTray(); };
             ContextMenuStrip trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Open m\u00E6la", null, delegate { RestoreFromTray(); });
-            trayMenu.Items.Add(new ToolStripSeparator());
-            trayMenu.Items.Add("Stop room and exit", null, delegate
-            {
-                _allowTrueClose = true;
-                StopEngine();
-                _notifyIcon.Visible = false;
-                Close();
-            });
+            trayMenu.Opening += delegate { BuildTrayMenu(trayMenu); };
+            BuildTrayMenu(trayMenu);
             _notifyIcon.ContextMenuStrip = trayMenu;
             _notifyIcon.BalloonTipClicked += delegate
             {
@@ -132,10 +131,6 @@ namespace Maela
                     _notifyIcon.BalloonTipTitle = "m\u00E6la updated";
                     _notifyIcon.BalloonTipText = "You are now running m\u00E6la " + Updater.CurrentVersionText + ".";
                     try { _notifyIcon.ShowBalloonTip(3000); } catch { }
-                    System.Windows.Forms.Timer hide = new System.Windows.Forms.Timer();
-                    hide.Interval = 6000;
-                    hide.Tick += delegate { hide.Stop(); hide.Dispose(); if (Visible) _notifyIcon.Visible = false; };
-                    hide.Start();
                 }
             };
         }
@@ -1366,16 +1361,23 @@ namespace Maela
 
         private void MainFormClosing(object sender, FormClosingEventArgs e)
         {
-            if (!_allowTrueClose && e.CloseReason == CloseReason.UserClosing &&
-                _engine != null && _engine.IsRunning && _engine.IsHost && _keepRoomAlive)
+            bool keepHostedRoom = _engine != null && _engine.IsRunning && _engine.IsHost && _keepRoomAlive;
+            if (!_allowTrueClose && e.CloseReason == CloseReason.UserClosing && (_preferences.CloseToTray || keepHostedRoom))
             {
                 e.Cancel = true;
-                try { _engine.LeaveVoice(); } catch { }
+                if (!_preferences.CloseToTray)
+                {
+                    // Tray is off, but this room is set to stay online: keep the server, leave voice.
+                    try { _engine.LeaveVoice(); } catch { }
+                    ShowTrayTip("m\u00E6la room still online", "The room server is still running. Click the tray icon to reopen m\u00E6la.");
+                }
+                else if (!_preferences.TrayHintShown)
+                {
+                    _preferences.TrayHintShown = true;
+                    PreferencesStore.Save(_preferences);
+                    ShowTrayTip("m\u00E6la is still running", "You're still in your room. Click the tray icon to reopen, or right-click it and choose Quit.");
+                }
                 Hide();
-                _notifyIcon.Visible = true;
-                _notifyIcon.BalloonTipTitle = "m\u00E6la room still online";
-                _notifyIcon.BalloonTipText = "The room server is still running. Double-click the tray icon to reopen m\u00E6la.";
-                try { _notifyIcon.ShowBalloonTip(2500); } catch { }
                 return;
             }
 
@@ -1389,13 +1391,62 @@ namespace Maela
             try { _notifyIcon.Dispose(); } catch { }
         }
 
+        private void ShowTrayTip(string title, string text)
+        {
+            _notifyIcon.Visible = true;
+            _notifyIcon.BalloonTipTitle = title;
+            _notifyIcon.BalloonTipText = text;
+            try { _notifyIcon.ShowBalloonTip(3000); } catch { }
+        }
+
+        /// <summary>Right-click menu on the tray icon, rebuilt each time so it shows the current state.</summary>
+        private void BuildTrayMenu(ContextMenuStrip menu)
+        {
+            menu.Items.Clear();
+            ToolStripItem open = menu.Items.Add("Open m\u00E6la", null, delegate { RestoreFromTray(); });
+            open.Font = new Font(open.Font, FontStyle.Bold);
+            bool inVoice = _engine != null && _engine.IsRunning && _engine.IsInVoice;
+            if (inVoice)
+            {
+                menu.Items.Add(new ToolStripSeparator());
+                ToolStripMenuItem mute = new ToolStripMenuItem("Mute", null, delegate { MuteButtonClicked(null, EventArgs.Empty); });
+                mute.Checked = _muted || _deafened;
+                menu.Items.Add(mute);
+                ToolStripMenuItem deafen = new ToolStripMenuItem("Deafen", null, delegate { DeafenButtonClicked(null, EventArgs.Empty); });
+                deafen.Checked = _deafened;
+                menu.Items.Add(deafen);
+                menu.Items.Add("Leave voice", null, delegate { LeaveClicked(null, EventArgs.Empty); });
+            }
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(_engine != null && _engine.IsRunning && _engine.IsHost ? "Stop room and quit" : "Quit m\u00E6la", null, delegate { QuitApp(); });
+        }
+
+        /// <summary>Really exits: leaves the room properly (or stops a hosted one) and closes.</summary>
+        internal void QuitApp()
+        {
+            _allowTrueClose = true;
+            StopEngine();
+            Close();
+        }
+
+        /// <summary>Another copy of mæla was started: bring this one to the front instead.</summary>
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == SingleInstance.ShowMessage)
+            {
+                RestoreFromTray();
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
         private void RestoreFromTray()
         {
             if (!Visible)
                 Show();
-            WindowState = FormWindowState.Normal;
+            if (WindowState == FormWindowState.Minimized)
+                WindowState = FormWindowState.Normal;
             Activate();
-            _notifyIcon.Visible = false;
             if (_pendingUpdate != null)
                 BeginInvoke((MethodInvoker)ShowPendingUpdate);
         }

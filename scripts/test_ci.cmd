@@ -85,6 +85,13 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Reconnecting after a crash ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\ReconnectTests.exe" /main:Maela.Tests.ReconnectTests %REFS% %ENGINE% "tests\ReconnectTests.cs"
+if errorlevel 1 exit /b 1
+"obj\ReconnectTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Downloads (official Twemoji source, verified) ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\AssetTests.exe" /main:Maela.Tests.AssetTests %REFS% %ENGINE% "tests\AssetTests.cs"
 if errorlevel 1 exit /b 1

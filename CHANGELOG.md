@@ -1,6 +1,16 @@
 # Changelog
 
-## 0.7.1 - Louder, clearer voices
+## 0.7.1 - Clearer voices, tray and instant rejoin
+
+- **Runs in the tray.** Closing the window keeps mæla running in the system tray and keeps
+  you in your room, like other voice apps. Click the tray icon to reopen it; right-click
+  it to mute, deafen, leave voice or quit. You can turn this off in Settings > App.
+- **Only one copy runs at a time.** Opening mæla again brings the running copy to the front
+  instead of starting a second one.
+- **Fixed: rejoining after mæla closed unexpectedly.** If mæla crashed, was closed from Task
+  Manager or lost its connection, the room kept a stale copy of you, so you showed up twice
+  when you came back. You now replace it straight away and land back in the channel you were
+  in. A normal quit also tells the room more reliably, so you disappear from the list at once.
 
 - **Automatic mic level** (on by default): quiet mics are boosted up to 24 dB and loud ones
   brought down, so everyone is heard at a similar, clear level. Background noise is never
