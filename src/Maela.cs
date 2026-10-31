@@ -1215,6 +1215,10 @@ namespace Maela
             _lastChannelSnapshot = String.Empty;
             _members.Items.Clear();
             _channels.Items.Clear();
+            // After leaving a joined room, probe it once more so its status and
+            // member count reflect the room without us.
+            if (_activeSavedRoom != null && !_activeSavedRoom.Owned)
+                _activeSavedRoom.PresenceChecked = false;
             _activeSavedRoom = null;
             _keepRoomAlive = false;
             _localBoundPort = 0;
@@ -1544,7 +1548,8 @@ namespace Maela
 
         /// <summary>
         /// Probes each joined (not hosted) saved room once per session to show whether it is
-        /// online. Rooms are not re-probed afterwards; use "Check if online" to refresh one.
+        /// online, plus once more after leaving it. There is no periodic re-probing; use
+        /// "Check if online" to refresh one.
         /// </summary>
         private void BeginPresenceScan()
         {
@@ -1653,7 +1658,7 @@ namespace Maela
                 _voiceTitle.Text = "General";
                 _connectionStatus.Text = "Not connected";
                 _connectionStatus.ForeColor = TextMuted;
-                _networkLabel.Text = room == null ? "Network idle" : (room.Owned ? "Host this room to refresh its room code." : "Status is checked once when m\u00E6la starts. Right-click the room to check again.");
+                _networkLabel.Text = room == null ? "Network idle" : (room.Owned ? "Host this room to refresh its room code." : "Status is checked when m\u00E6la starts and when you leave. Right-click the room to check again.");
             }
         }
 

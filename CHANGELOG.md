@@ -20,7 +20,7 @@
 - App version is now stamped from the `VERSION` file at build time.
 - Added an echo canceller regression test to CI.
 - Saved rooms are no longer probed every 5 seconds. Each joined room is checked once
-  when mæla starts (or when it is added). While you are connected, the room's status and
+  when mæla starts (or when it is added), and once more when you leave it. While you are connected, the room's status and
   member count come from the live session. Right-click a room and choose
   "Check if online" to refresh it by hand.
 
