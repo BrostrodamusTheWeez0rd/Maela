@@ -44,9 +44,16 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Automatic mic level ===
-"%CSC%" /nologo /target:exe /optimize+ /out:"obj\AutoGainTests.exe" "tests\AutoGainTests.cs" "src\AutoGain.cs"
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\AutoGainTests.exe" "tests\AutoGainTests.cs" "src\AutoGain.cs" "src\VoicingDetector.cs"
 if errorlevel 1 exit /b 1
 "obj\AutoGainTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Keyboard typing ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\KeyboardTests.exe" /main:Maela.Tests.KeyboardTests %REFS% %ENGINE% "tests\KeyboardTests.cs"
+if errorlevel 1 exit /b 1
+"obj\KeyboardTests.exe"
 if errorlevel 1 exit /b 1
 
 echo.

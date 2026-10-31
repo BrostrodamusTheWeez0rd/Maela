@@ -17,7 +17,7 @@ Current release: **0.7.0**.
 - Best-effort UPnP mapping and public IPv4 discovery
 - Encrypted voice and chat (X25519 + AES-256 + HMAC-SHA256), with optional room passwords
 - Room codes that verify the host's identity, such as `M-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX`
-- Opus voice with silence detection: roughly 60 kbps per person talking, nothing while quiet
+- Opus voice that only sends when you speak (voice detection ignores typing and clicks): roughly 60 kbps per person talking, nothing while quiet
 - Saved rooms with online/offline probing
 - Multiple voice channels inside a room, each with its own text chat
 - Discord-style sidebar showing who is in which channel, who's speaking, muted or deafened
@@ -124,6 +124,7 @@ src/Assets.cs            Verified downloads (emoji pack)
 src/NoiseSuppressor.cs   Background-noise filter
 src/SoundFx.cs           Built-in sound-effect synth
 src/VoiceCodec.cs        Opus encoding, silence detection, loss recovery
+src/VoicingDetector.cs   Tells a voice (pitched) from typing, clicks and bumps
 deps/                    Pinned hashes for open-source dependencies (fetched, never stored here)
 src/MainForm.Chat.cs     Chat view
 tests/                   Crypto, security, voice, chat, echo, noise, sound and download tests

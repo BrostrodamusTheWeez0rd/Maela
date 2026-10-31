@@ -17,11 +17,11 @@ namespace Maela
     /// <summary>
     /// Turns 10 ms microphone frames into 20 ms Opus packets and decides when to send them.
     ///
-    /// Silence detection: an adaptive noise floor tracks the room's background level. A frame
-    /// counts as speech when it is clearly above that floor; sending continues for a short
-    /// hangover after speech stops so word endings aren't clipped, and the frame just before
-    /// speech starts is sent too so the first syllable isn't lost. Nothing is sent while
-    /// quiet, which is most of the time in a voice chat.
+    /// Silence detection: a frame counts as speech when it is clearly above the room's
+    /// background level AND has the pitch of a voice (so typing, clicks and taps on their own
+    /// never open the mic). Sending continues for a short hangover after speech so word endings
+    /// aren't clipped, and the 60 ms before speech starts is sent too so first syllables aren't
+    /// lost. Nothing is sent while quiet, which is most of the time in a voice chat.
     ///
     /// Every frame is encoded (even silent ones) so the encoder's state stays continuous; the
     /// sequence number advances every 20 ms so receivers can tell loss from silence.
@@ -34,6 +34,7 @@ namespace Maela
         public const int Bitrate = 32000;
 
         private const int HangoverFrames = 20;        // 400 ms
+        private const int PreRollFrames = 3;          // 60 ms sent ahead of the first voiced frame
         private const float SpeechAboveFloorDb = 10.0f;
         private const float AbsoluteSpeechDb = -55.0f;
         private const float FloorRiseDbPerFrame = 0.08f;
@@ -48,8 +49,8 @@ namespace Maela
         private float _noiseFloorDb = -60.0f;
         private int _hangover;
         private bool _open;
-        private byte[] _previous;
-        private uint _previousSequence;
+        private readonly Queue<EncodedVoice> _recent = new Queue<EncodedVoice>();
+        private readonly VoicingDetector _voicing = new VoicingDetector();
 
         public VoiceEncoder()
         {
@@ -90,7 +91,11 @@ namespace Maela
         private void EncodeFrame(List<EncodedVoice> output)
         {
             uint sequence = ++_sequence;
-            bool speech = UpdateGate();
+            // Only a voice opens the mic: loud AND pitched. Key clicks, taps and bumps are
+            // loud but have no pitch, so on their own they're never sent.
+            bool loud = UpdateGate();
+            bool voiced = _voicing.Analyze(_frame, FrameSamples);
+            bool speech = loud && voiced;
 
 #if !MAELA_STUB_CODEC
             int length = _opus.Encode(_frame, 0, FrameSamples, _packet, 0, _packet.Length);
@@ -119,13 +124,22 @@ namespace Maela
 
             if (_open)
             {
-                if (!wasOpen && _previous != null && _previousSequence == sequence - 1)
-                    output.Add(Packet(_previousSequence, _previous)); // Pre-roll: don't clip the first syllable.
+                if (!wasOpen)
+                {
+                    // Pre-roll: send the few frames before the first voiced one, so consonants
+                    // that start a word ("s", "f", "t") aren't clipped.
+                    foreach (EncodedVoice earlier in _recent)
+                        output.Add(earlier);
+                }
                 output.Add(Packet(sequence, data));
+                _recent.Clear();
             }
-
-            _previous = data;
-            _previousSequence = sequence;
+            else
+            {
+                _recent.Enqueue(Packet(sequence, data));
+                while (_recent.Count > PreRollFrames)
+                    _recent.Dequeue();
+            }
         }
 
         private bool UpdateGate()

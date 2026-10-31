@@ -29,6 +29,7 @@ namespace Maela
         private double _levelDb = -40.0;
         private double _floorDb = -70.0;
         private double _previousGain = 1.0;
+        private readonly VoicingDetector _voicing = new VoicingDetector();
 
         /// <summary>Current gain in dB (for display and tests).</summary>
         public double GainDb { get { return _gainDb; } }
@@ -64,7 +65,10 @@ namespace Maela
                 _floorDb += 0.02;
             if (_floorDb < -90.0) _floorDb = -90.0;
 
-            bool speech = rmsDb > Math.Max(_floorDb + SpeechAboveFloorDb, AbsoluteSpeechDb);
+            // Adapt only to a real voice (loud and pitched), so key clicks and bumps can't
+            // push the gain around.
+            bool voiced = _voicing.Analyze(pcm16);
+            bool speech = voiced && rmsDb > Math.Max(_floorDb + SpeechAboveFloorDb, AbsoluteSpeechDb);
             if (speech)
             {
                 // Follow peaks of speech quickly, let the level relax slowly.

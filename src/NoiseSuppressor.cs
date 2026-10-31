@@ -3,7 +3,7 @@ using System;
 namespace Maela
 {
     /// <summary>
-    /// Removes steady background noise (fans, hum, keyboard hiss) from 48 kHz mono speech.
+    /// Removes steady background noise (fans, hum, hiss) and key clicks from 48 kHz mono speech.
     ///
     /// Short-time spectral processing (512-point FFT, 50% overlap, square-root Hann windows):
     ///   1. Track the noise floor in each frequency band. The estimate follows quiet levels
@@ -40,6 +40,18 @@ namespace Maela
         private int _outCount;
         private int _blocks;
 
+        // Keyboard / click removal: sudden short bursts of high-frequency energy.
+        private const int ClickFromBin = 11;            // ~1 kHz and up get turned down
+        private const int ClickDetectFromBin = 21;      // ~2 kHz and up are watched
+        private const float ClickJump = 6.0f;           // burst must be 6x (7.8 dB) above recent level
+        private const float ClickGain = 0.18f;          // about -15 dB while a click rings
+        private const int ClickHoldBlocks = 4;          // ~21 ms
+        private const float ClickLowRise = 2.5f;        // ...and the band below 1 kHz rises less than this
+        private const float ClickBrightness = 0.5f;     // ...or the burst is brighter than any voice
+        private float _highAverage;
+        private float _lowAverage;
+        private int _clickHold;
+
         public NoiseSuppressor()
         {
             int i;
@@ -48,8 +60,47 @@ namespace Maela
             Reset();
         }
 
+        /// <summary>
+        /// Key clicks are short, sharp bursts concentrated above ~2 kHz; voices live mostly lower.
+        /// When the high band suddenly jumps well above its recent level while the low band does
+        /// not, everything above ~1 kHz is turned down for ~20 ms.
+        /// </summary>
+        private float DetectClick()
+        {
+            float high = 0.0f, low = 0.0f;
+            int k;
+            for (k = 1; k < ClickFromBin; k++)
+                low += _re[k] * _re[k] + _im[k] * _im[k];
+            for (k = ClickDetectFromBin; k < Bins; k++)
+                high += _re[k] * _re[k] + _im[k] * _im[k];
+
+            // When a voice starts, the low band jumps along with the high band and still carries
+            // most of the energy. A key click either jumps the high band on its own (typing while
+            // someone talks) or is far brighter than a voice (typing in a quiet room).
+            bool jump = _blocks > 25 && high > ClickJump * (_highAverage + 1.0f) && high > 1.0e6f;
+            bool burst = jump && (low < ClickLowRise * (_lowAverage + 1.0f) || high > ClickBrightness * low);
+            if (burst)
+                _clickHold = ClickHoldBlocks;
+            else
+            {
+                // Learn only from non-click blocks.
+                _highAverage = _blocks == 1 ? high : 0.9f * _highAverage + 0.1f * high;
+                _lowAverage = _blocks == 1 ? low : 0.9f * _lowAverage + 0.1f * low;
+            }
+
+            if (_clickHold > 0)
+            {
+                _clickHold--;
+                return ClickGain;
+            }
+            return 1.0f;
+        }
+
         public void Reset()
         {
+            _highAverage = 0.0f;
+            _lowAverage = 0.0f;
+            _clickHold = 0;
             Array.Clear(_history, 0, _history.Length);
             Array.Clear(_overlap, 0, _overlap.Length);
             Array.Clear(_noise, 0, _noise.Length);
@@ -109,6 +160,7 @@ namespace Maela
             }
             _fft.Forward(_re, _im);
             _blocks++;
+            float clickGain = DetectClick();
 
             for (k = 0; k < Bins; k++)
             {
@@ -143,6 +195,8 @@ namespace Maela
                 _gain[k] = gain;
                 _prevPost[k] = post;
 
+                if (k >= ClickFromBin)
+                    gain *= clickGain;
                 _re[k] *= gain;
                 _im[k] *= gain;
             }

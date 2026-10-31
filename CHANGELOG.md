@@ -6,6 +6,11 @@
   brought down, so everyone is heard at a similar, clear level. Background noise is never
   pumped up between words, and a soft limiter prevents clipping. Turn it off in
   Settings > Voice & audio.
+- **Keyboard typing is no longer sent.** Your mic now only opens for an actual voice (it
+  listens for pitch, not just loudness), so typing, clicks and desk bumps on their own stay
+  silent. The first 60 ms before you speak are still sent, so words aren't clipped.
+- **Key clicks under your voice are turned down** by the noise filter (about 15 dB), without
+  changing how your voice sounds.
 - Fixed: the "+" button for creating channels was positioned off-screen.
 
 ## 0.7.0 - New look, Encryption, Opus, Chat, Echo Cancellation & Auto-Update
