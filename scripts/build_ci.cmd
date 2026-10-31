@@ -48,12 +48,22 @@ if not exist "obj" mkdir "obj"
 
 echo Version %VERSION%
 
-"%CSC%" /nologo /target:winexe /optimize+ /out:"dist\Maela.exe" /win32icon:"assets\Maela.ico" /resource:"assets\MaelaMark.png",MaelaMark.png /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll "src\*.cs" "obj\VersionInfo.cs"
+rem Fetch and verify build-time dependencies (see deps\*.lock).
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fetch_deps.ps1"
+if errorlevel 1 (
+    echo ERROR: dependency download or verification failed.
+    exit /b 1
+)
+
+rem Concentus (the Opus codec, BSD-3) is compiled straight into the exe so mæla stays a
+rem single file. PARITY matches upstream's build; warnings in the ported C code are expected.
+"%CSC%" /nologo /target:winexe /optimize+ /define:PARITY /nowarn:0162,0168,0219,0414,0649,0675,1591,1573 /out:"dist\Maela.exe" /win32icon:"assets\Maela.ico" /resource:"assets\MaelaMark.png",MaelaMark.png /resource:"THIRD_PARTY_NOTICES.txt",THIRD_PARTY_NOTICES.txt /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll /reference:System.Security.dll "src\*.cs" "obj\VersionInfo.cs" /recurse:"obj\deps\concentus\CSharp\Concentus\*.cs"
 if errorlevel 1 exit /b 1
 
 copy /y "README.md" "dist\README.md" >nul
 copy /y "LICENSE" "dist\LICENSE" >nul
 copy /y "VERSION" "dist\VERSION" >nul
+copy /y "THIRD_PARTY_NOTICES.txt" "dist\THIRD_PARTY_NOTICES.txt" >nul
 copy /y "assets\MaelaLogo.png" "dist\MaelaLogo.png" >nul
 
 echo Built dist\Maela.exe

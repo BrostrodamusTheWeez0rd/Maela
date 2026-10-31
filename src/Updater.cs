@@ -359,14 +359,14 @@ namespace Maela
             MinimizeBox = false;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            BackColor = Color.FromArgb(49, 51, 56);
-            ForeColor = Color.FromArgb(242, 243, 245);
+            BackColor = Theme.Current.Main;
+            ForeColor = Theme.Current.Text;
             Font = new Font("Segoe UI", 9F);
 
             Label title = new Label();
             title.AutoSize = true;
-            title.Font = new Font("Segoe UI", 15F, FontStyle.Bold);
-            title.ForeColor = Color.White;
+            title.Font = Ui.Heading;
+            title.ForeColor = Theme.Current.Text;
             title.Text = "mæla " + Updater.FormatVersion(info.Version) + " is available";
             title.Location = new Point(22, 18);
             Controls.Add(title);
@@ -375,7 +375,7 @@ namespace Maela
             subtitle.AutoSize = false;
             subtitle.Size = new Size(476, 40);
             subtitle.Location = new Point(24, 54);
-            subtitle.ForeColor = Color.FromArgb(181, 186, 193);
+            subtitle.ForeColor = Theme.Current.Text2;
             subtitle.Text = "You have " + Updater.CurrentVersionText + "." +
                 (Updater.CanInstall(info)
                     ? (inCall ? " Installing restarts mæla and ends your current room session." : " Installing takes a few seconds and restarts mæla.")
@@ -387,8 +387,8 @@ namespace Maela
             notes.ReadOnly = true;
             notes.ScrollBars = ScrollBars.Vertical;
             notes.BorderStyle = BorderStyle.FixedSingle;
-            notes.BackColor = Color.FromArgb(30, 31, 34);
-            notes.ForeColor = Color.FromArgb(219, 222, 225);
+            notes.BackColor = Theme.Current.Surface;
+            notes.ForeColor = Theme.Current.Text2;
             notes.Location = new Point(24, 100);
             notes.Size = new Size(472, 196);
             string body = String.IsNullOrWhiteSpace(info.Notes) ? "No release notes were provided." : info.Notes.Trim();
@@ -423,9 +423,9 @@ namespace Maela
             b.Text = text;
             b.FlatStyle = FlatStyle.Flat;
             b.FlatAppearance.BorderSize = primary ? 0 : 1;
-            b.FlatAppearance.BorderColor = Color.FromArgb(63, 65, 71);
-            b.BackColor = primary ? Color.FromArgb(88, 101, 242) : Color.FromArgb(43, 45, 49);
-            b.ForeColor = Color.White;
+            b.FlatAppearance.BorderColor = Theme.Current.Line;
+            b.BackColor = primary ? Theme.Current.Accent : Theme.Current.Surface2;
+            b.ForeColor = primary ? Color.White : Theme.Current.Text;
             b.Cursor = Cursors.Hand;
             return b;
         }

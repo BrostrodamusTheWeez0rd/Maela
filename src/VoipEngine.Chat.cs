@@ -6,6 +6,14 @@ using System.Text;
 
 namespace Maela
 {
+    /// <summary>Total for one emoji on one message.</summary>
+    internal sealed class ReactionSummary
+    {
+        public string Emoji;
+        public int Count;
+        public bool Mine;
+    }
+
     /// <summary>One text message in a voice channel's chat.</summary>
     internal sealed class ChatMessage
     {
@@ -19,6 +27,15 @@ namespace Maela
         public bool Pending;        // Sent by us, not yet confirmed by the host.
         public bool Failed;         // Gave up waiting for the host.
         public bool IsLocal;
+
+        /// <summary>0 = text message, 1 = reaction toggle (Text is the emoji, TargetSequence the message).</summary>
+        public byte Kind;
+        public uint TargetSequence;
+
+        public bool IsReaction { get { return Kind == ChatKindReaction; } }
+
+        public const byte ChatKindText = 0;
+        public const byte ChatKindReaction = 1;
 
         // Client-side retry state.
         internal DateTime LastSentUtc;
@@ -83,7 +100,19 @@ namespace Maela
         /// <summary>Posts a message to the voice channel we are in. Returns false if we are not in one.</summary>
         public bool SendChat(string text)
         {
-            string clean = CleanChatText(text);
+            return Post(ChatMessage.ChatKindText, 0, CleanChatText(text));
+        }
+
+        /// <summary>Adds your reaction to a message, or removes it if you already reacted with that emoji.</summary>
+        public bool ToggleReaction(uint targetSequence, string emoji)
+        {
+            if (targetSequence == 0 || EmojiPack.Find(emoji) == null)
+                return false;
+            return Post(ChatMessage.ChatKindReaction, targetSequence, EmojiPack.Find(emoji).Text);
+        }
+
+        private bool Post(byte kind, uint target, string clean)
+        {
             if (clean.Length == 0 || !_running || !IsConnected)
                 return false;
             int channelId = _localChannelId;
@@ -92,11 +121,13 @@ namespace Maela
 
             if (_isHost)
             {
-                PostHostChat(channelId, _localId, _localName, 0, clean);
+                PostHostChat(channelId, _localId, _localName, 0, clean, kind, target);
                 return true;
             }
 
             ChatMessage pending = new ChatMessage();
+            pending.Kind = kind;
+            pending.TargetSequence = target;
             pending.ChannelId = channelId;
             pending.SenderId = _localId;
             pending.SenderName = _localName;
@@ -166,9 +197,11 @@ namespace Maela
 
         // ----- Host -----
 
-        private void PostHostChat(int channelId, uint senderId, string senderName, uint clientId, string text)
+        private void PostHostChat(int channelId, uint senderId, string senderName, uint clientId, string text, byte kind, uint target)
         {
             ChatMessage message = new ChatMessage();
+            message.Kind = kind;
+            message.TargetSequence = target;
             message.ChannelId = channelId;
             message.SenderId = senderId;
             message.SenderName = String.IsNullOrEmpty(senderName) ? "Guest" : senderName;
@@ -218,11 +251,24 @@ namespace Maela
                 uint clientId;
                 int channelId;
                 string text;
-                if (!TryParseChatSend(packet.Payload, out clientId, out channelId, out text))
+                byte kind;
+                uint target;
+                if (!TryParseChatSend(packet.Payload, out clientId, out channelId, out kind, out target, out text))
                     return true;
                 text = CleanChatText(text);
                 if (text.Length == 0)
                     return true;
+                if (kind == ChatMessage.ChatKindReaction)
+                {
+                    EmojiEntry emoji = EmojiPack.Find(text);
+                    if (emoji == null || target == 0)
+                        return true; // Reactions must be a known emoji on a real message.
+                    text = emoji.Text;
+                }
+                else if (kind != ChatMessage.ChatKindText)
+                {
+                    return true;
+                }
 
                 ChatMessage duplicate = null;
                 string name;
@@ -267,7 +313,7 @@ namespace Maela
                     return true;
                 }
 
-                PostHostChat(channelId, known.Id, name, clientId, text);
+                PostHostChat(channelId, known.Id, name, clientId, text, kind, target);
                 return true;
             }
 
@@ -437,6 +483,8 @@ namespace Maela
             BinaryWriter writer = new BinaryWriter(stream);
             writer.Write(pending.ClientId);
             writer.Write(pending.ChannelId);
+            writer.Write(pending.Kind);
+            writer.Write(pending.TargetSequence);
             writer.Write((ushort)text.Length);
             writer.Write(text);
             writer.Flush();
@@ -467,6 +515,8 @@ namespace Maela
             writer.Write(name);
             writer.Write((ushort)text.Length);
             writer.Write(text);
+            writer.Write(message.Kind);
+            writer.Write(message.TargetSequence);
             writer.Flush();
             return stream.ToArray();
         }
@@ -474,7 +524,7 @@ namespace Maela
         private static bool TryParseChat(byte[] payload, out ChatMessage message)
         {
             message = null;
-            if (payload == null || payload.Length < 30)
+            if (payload == null || payload.Length < 32)
                 return false;
             try
             {
@@ -490,9 +540,12 @@ namespace Maela
                     return false;
                 m.SenderName = Encoding.UTF8.GetString(payload, offset, nameLength); offset += nameLength;
                 int textLength = BitConverter.ToUInt16(payload, offset); offset += 2;
-                if (offset + textLength != payload.Length)
+                if (offset + textLength + 5 != payload.Length)
                     return false;
                 m.Text = CleanChatText(Encoding.UTF8.GetString(payload, offset, textLength));
+                offset += textLength;
+                m.Kind = payload[offset++];
+                m.TargetSequence = BitConverter.ToUInt32(payload, offset);
                 if (m.ChannelId <= 0 || m.Sequence == 0)
                     return false;
                 message = m;
@@ -504,19 +557,23 @@ namespace Maela
             }
         }
 
-        private static bool TryParseChatSend(byte[] payload, out uint clientId, out int channelId, out string text)
+        private static bool TryParseChatSend(byte[] payload, out uint clientId, out int channelId, out byte kind, out uint target, out string text)
         {
             clientId = 0;
             channelId = 0;
+            kind = 0;
+            target = 0;
             text = null;
-            if (payload == null || payload.Length < 10)
+            if (payload == null || payload.Length < 15)
                 return false;
             clientId = BitConverter.ToUInt32(payload, 0);
             channelId = BitConverter.ToInt32(payload, 4);
-            int length = BitConverter.ToUInt16(payload, 8);
-            if (10 + length != payload.Length || length > MaxChatTextBytes + 16)
+            kind = payload[8];
+            target = BitConverter.ToUInt32(payload, 9);
+            int length = BitConverter.ToUInt16(payload, 13);
+            if (15 + length != payload.Length || length > MaxChatTextBytes + 16)
                 return false;
-            try { text = Encoding.UTF8.GetString(payload, 10, length); }
+            try { text = Encoding.UTF8.GetString(payload, 15, length); }
             catch { return false; }
             return true;
         }
@@ -532,6 +589,59 @@ namespace Maela
         {
             try { return UnixEpoch.AddMilliseconds(value); }
             catch { return DateTime.UtcNow; }
+        }
+
+        /// <summary>
+        /// Folds reaction toggles into per-message totals. Pending (unconfirmed) toggles of our
+        /// own are included so a click shows immediately.
+        /// </summary>
+        public static Dictionary<uint, List<ReactionSummary>> SummarizeReactions(ChatMessage[] messages)
+        {
+            Dictionary<string, HashSet<uint>> who = new Dictionary<string, HashSet<uint>>(StringComparer.Ordinal);
+            Dictionary<string, bool> mine = new Dictionary<string, bool>(StringComparer.Ordinal);
+            List<string> order = new List<string>();
+            int i;
+            for (i = 0; i < messages.Length; i++)
+            {
+                ChatMessage m = messages[i];
+                if (!m.IsReaction || m.Failed)
+                    continue;
+                string key = m.TargetSequence + "|" + m.Text;
+                HashSet<uint> set;
+                if (!who.TryGetValue(key, out set))
+                {
+                    set = new HashSet<uint>();
+                    who[key] = set;
+                    order.Add(key);
+                }
+                if (!set.Remove(m.SenderId))
+                    set.Add(m.SenderId);
+                if (m.IsLocal)
+                    mine[key] = set.Contains(m.SenderId);
+            }
+
+            Dictionary<uint, List<ReactionSummary>> result = new Dictionary<uint, List<ReactionSummary>>();
+            for (i = 0; i < order.Count; i++)
+            {
+                HashSet<uint> set = who[order[i]];
+                if (set.Count == 0)
+                    continue;
+                int bar = order[i].IndexOf('|');
+                uint target = UInt32.Parse(order[i].Substring(0, bar));
+                ReactionSummary summary = new ReactionSummary();
+                summary.Emoji = order[i].Substring(bar + 1);
+                summary.Count = set.Count;
+                bool m;
+                summary.Mine = mine.TryGetValue(order[i], out m) && m;
+                List<ReactionSummary> list;
+                if (!result.TryGetValue(target, out list))
+                {
+                    list = new List<ReactionSummary>();
+                    result[target] = list;
+                }
+                list.Add(summary);
+            }
+            return result;
         }
     }
 }

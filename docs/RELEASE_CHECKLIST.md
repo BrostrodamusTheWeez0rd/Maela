@@ -5,8 +5,11 @@ Before tagging a public build:
 - [ ] `build_Maela.cmd` succeeds on a clean Windows machine.
 - [ ] `Maela.exe` shows the branded icon in Explorer, taskbar and title bar.
 - [ ] Host creates a room code and does not display raw public IP/port in normal UI.
+- [ ] A saved hosted room keeps the same code after restarting mæla (same public IP and port).
+- [ ] Joining with a password-protected room works with the right password and is refused with a wrong one.
+- [ ] Voice sounds clear between two machines, and nothing is sent while nobody talks (Task Manager network graph stays flat).
 - [ ] A second machine can join using only the room code.
-- [ ] A one-character room-code typo is rejected.
+- [ ] A one-character room-code typo is rejected, and an old 0.6 code shows the "ask for a new code" message.
 - [ ] Saved rooms survive restart; each is probed once at startup (not repeatedly), and "Check if online" refreshes one.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.
@@ -27,4 +30,9 @@ Before tagging a public build:
 - [ ] `VERSION` is bumped and `CHANGELOG.md` has a matching section.
 - [ ] After the release workflow runs, the release has both `Maela.exe` and `Maela.exe.sha256`.
 - [ ] A copy of the previous version offers the update and restarts into the new version.
+- [ ] First run shows Setup; the emoji download completes; Skip asks again next launch.
+- [ ] Each theme looks right, including the Windows title bar colour (Windows 11).
+- [ ] Reactions, the emoji picker and search work; colour emoji show in chat.
+- [ ] Deafen silences everyone and shows the deafened icon to others; ping shows in the voice card.
+- [ ] Sound effects play at a comfortable level and can be turned off.
 - [ ] `package_release.cmd` produces the expected release ZIP.

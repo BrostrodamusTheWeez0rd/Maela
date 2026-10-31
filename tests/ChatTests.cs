@@ -36,7 +36,7 @@ namespace Maela.Tests
         {
             int count = 0;
             foreach (ChatMessage m in engine.GetChat(channel))
-                if (!m.Pending && !m.Failed)
+                if (!m.Pending && !m.Failed && !m.IsReaction)
                     count++;
             return count;
         }
@@ -45,9 +45,39 @@ namespace Maela.Tests
         {
             List<string> parts = new List<string>();
             foreach (ChatMessage m in engine.GetChat(channel))
-                if (!m.Pending && !m.Failed)
+                if (!m.Pending && !m.Failed && !m.IsReaction)
                     parts.Add(m.SenderName + ":" + m.Text);
             return String.Join("|", parts.ToArray());
+        }
+
+        static int ReactionCount(VoipEngine engine, uint target, string emoji)
+        {
+            Dictionary<uint, List<ReactionSummary>> all = VoipEngine.SummarizeReactions(engine.GetChat(1));
+            List<ReactionSummary> list;
+            if (!all.TryGetValue(target, out list)) return 0;
+            foreach (ReactionSummary r in list)
+                if (r.Emoji == EmojiPack.Find(emoji).Text) return r.Count;
+            return 0;
+        }
+
+        static string Views(params VoipEngine[] engines)
+        {
+            System.Text.StringBuilder b = new System.Text.StringBuilder();
+            foreach (VoipEngine e in engines)
+            {
+                b.Append(" [");
+                foreach (RoomMemberInfo m in e.GetAllMembers())
+                    b.Append(m.Name).Append(m.Muted ? ":M" : "").Append(m.Deafened ? ":D" : "").Append(' ');
+                b.Append(']');
+            }
+            return b.ToString();
+        }
+
+        static bool MemberFlag(VoipEngine engine, string name, bool muted)
+        {
+            foreach (RoomMemberInfo m in engine.GetAllMembers())
+                if (m.Name == name) return muted ? m.Muted : m.Deafened;
+            return false;
         }
 
         static VoipEngine Client(int port, string name, double loss)
@@ -55,7 +85,7 @@ namespace Maela.Tests
             VoipEngine c = new VoipEngine();
             c.HeadlessForTests = true;
             c.PacketLossForTests = loss;
-            c.StartClient(new IPEndPoint(IPAddress.Loopback, port), name);
+            c.StartClient(new IPEndPoint(IPAddress.Loopback, port), name, VoipEngineTestKeys.HostFingerprint, null);
             return c;
         }
 
@@ -66,7 +96,7 @@ namespace Maela.Tests
             VoipEngine host = new VoipEngine();
             host.HeadlessForTests = true;
             host.PacketLossForTests = loss;
-            host.StartHost(0, "Host", "Test Room", new List<string>(new string[] { "General", "Games" }));
+            host.StartHost(0, "Host", "Test Room", new List<string>(new string[] { "General", "Games" }), VoipEngineTestKeys.HostPrivateKey, null);
             int port = host.BoundPort;
             VoipEngine alice = Client(port, "Alice", loss);
             VoipEngine bob = null;
@@ -106,6 +136,33 @@ namespace Maela.Tests
                 Check(WaitFor(delegate { return Confirmed(bob, 2) == 1; }, 8000), "Bob sees his #Games message");
                 Thread.Sleep(1500);
                 Check(Confirmed(alice, 2) == 0 && Confirmed(host, 1) == 32 && Confirmed(alice, 1) == 32, "#Games message stays out of #General");
+
+                // Reactions: toggles everyone agrees on, applied to the right message.
+                bob.ChangeChannel(1);
+                Check(WaitFor(delegate { return bob.LocalChannelId == 1; }, 8000), "Bob back in #General");
+                uint target = 0;
+                foreach (ChatMessage m in host.GetChat(1)) if (!m.IsReaction && m.Text == "hi host") target = m.Sequence;
+                Check(target != 0, "found Alice's message to react to");
+                alice.ToggleReaction(target, "\uD83D\uDC4D");
+                bob.ToggleReaction(target, "\uD83D\uDC4D");
+                host.ToggleReaction(target, "\u2764\uFE0F");
+                Check(WaitFor(delegate { return ReactionCount(alice, target, "\uD83D\uDC4D") == 2 && ReactionCount(bob, target, "\u2764\uFE0F") == 1 && ReactionCount(host, target, "\uD83D\uDC4D") == 2; }, 10000),
+                    "everyone sees 2x thumbs-up and 1x heart");
+                bob.ToggleReaction(target, "\uD83D\uDC4D");
+                Check(WaitFor(delegate { return ReactionCount(alice, target, "\uD83D\uDC4D") == 1 && ReactionCount(host, target, "\uD83D\uDC4D") == 1; }, 10000), "toggling again removes Bob's reaction");
+                Check(!alice.ToggleReaction(target, "not-an-emoji"), "only known emoji can be used as reactions");
+
+                // Shared status and ping.
+                DateTime t0 = DateTime.UtcNow;
+                alice.Muted = true;
+                bob.Deafened = true;
+                Check(WaitFor(delegate { return MemberFlag(host, "Alice", true) && MemberFlag(bob, "Alice", true) && MemberFlag(alice, "Bob", false); }, 8000),
+                    "everyone sees Alice muted and Bob deafened" + Views(host, alice, bob));
+                Console.WriteLine("     status reached everyone in " + (DateTime.UtcNow - t0).TotalSeconds.ToString("F1") + " s");
+                alice.Muted = false;
+                Check(WaitFor(delegate { return !MemberFlag(bob, "Alice", true); }, 8000), "unmute is shared too");
+                Check(WaitFor(delegate { return alice.PingMs >= 0; }, 8000), "ping measured (" + alice.PingMs + " ms)");
+                bob.Deafened = false;
 
                 // You can only post in the channel you are in.
                 alice.LeaveVoice();
