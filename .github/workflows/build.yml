@@ -1,0 +1,21 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build mæla
+        shell: cmd
+        run: scripts\build_ci.cmd
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Maela-windows
+          path: dist/

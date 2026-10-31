@@ -1,0 +1,19 @@
+# Build output
+dist/
+release/
+*.exe
+*.pdb
+*.zip
+
+# User / editor files
+.vs/
+.vscode/
+*.user
+*.suo
+*.tmp
+*.log
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
