@@ -4,7 +4,7 @@ mæla is currently an early self-hosted voice client.
 
 ## Important current limitations
 
-- Voice and control packets are not end-to-end encrypted.
+- Voice, chat and control packets are not end-to-end encrypted. Chat history lives in the host's memory while the room runs.
 - Room codes hide raw endpoint details from the normal interface, but are not cryptographic secrets.
 - Hosting exposes a UDP service to invited peers and may create a UPnP router mapping.
 

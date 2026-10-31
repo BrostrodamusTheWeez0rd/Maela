@@ -1,6 +1,24 @@
 # Changelog
 
-## 0.7.0 - Echo Cancellation & Auto-Update
+## 0.7.0 - Chat, Echo Cancellation & Auto-Update
+
+- Added text chat to every voice channel. The main area now shows the chat for the
+  channel you're in, Discord-style, with names, avatars, timestamps and day dividers.
+  - Joining a channel loads its recent history (up to 200 messages are kept per channel
+    while the room is running).
+  - Delivery is reliable over UDP: lost messages are re-sent automatically and everyone
+    sees the same order. Tested at 25% simulated packet loss.
+  - The taskbar button flashes when a message arrives while mæla is in the background.
+  - Right-click a message to copy it.
+- The sidebar now shows each channel with the people in it underneath (speaking ring,
+  host tag, local-mute tag), plus a Lobby section. Right-click a person for volume, mute,
+  move, kick and ban; double-click a channel or a person to join them.
+- The room code and network status moved to the top bar.
+- Channel switches are now retried until the host confirms them, and the host re-sends the
+  member list every 3 seconds, so one lost packet can no longer leave someone in the wrong
+  channel or with an outdated member list.
+- "Leave Room" is available while still connecting (shown as "Cancel").
+- Fixed "&" showing as an underline in some buttons and labels.
 
 - Added built-in acoustic echo cancellation, on by default. Friends no longer hear
   themselves when you use speakers instead of a headset.
@@ -18,7 +36,7 @@
 - Release workflow now publishes automatically when `VERSION` changes on `main`, attaches
   `Maela.exe.sha256`, and uses the matching CHANGELOG section as release notes.
 - App version is now stamped from the `VERSION` file at build time.
-- Added an echo canceller regression test to CI.
+- Added echo canceller and chat regression tests to CI.
 - Saved rooms are no longer probed every 5 seconds. Each joined room is checked once
   when mæla starts (or when it is added), and once more when you leave it. While you are connected, the room's status and
   member count come from the live session. Right-click a room and choose

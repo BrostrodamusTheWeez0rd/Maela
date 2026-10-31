@@ -13,7 +13,11 @@ Before tagging a public build:
 - [ ] Audio is only delivered inside the current voice channel.
 - [ ] Leave Voice keeps a persistent host room alive when enabled.
 - [ ] Closing persistent host mode sends the server to tray without leaving the microphone live.
-- [ ] Per-user volume/mute works locally.
+- [ ] Per-user volume/mute works locally (right-click a person in the sidebar).
+- [ ] Sidebar shows each channel's members underneath it; Lobby lists people not in voice.
+- [ ] Chat messages appear for everyone in the same channel and not in other channels.
+- [ ] Someone joining a channel sees its recent chat history.
+- [ ] The taskbar flashes for a new message while mæla is in the background.
 - [ ] Host kick and session-ban controls work.
 - [ ] Windows Firewall helper succeeds when approved.
 - [ ] UPnP success and failure paths are both understandable.

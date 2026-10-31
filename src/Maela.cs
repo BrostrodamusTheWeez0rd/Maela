@@ -42,7 +42,7 @@ namespace Maela
         }
     }
 
-    internal sealed class MainForm : Form
+    internal sealed partial class MainForm : Form
     {
         private static readonly Color Rail = Color.FromArgb(30, 31, 34);
         private static readonly Color Sidebar = Color.FromArgb(43, 45, 49);
@@ -58,7 +58,6 @@ namespace Maela
 
         private readonly ListBox _rooms = new ListBox();
         private readonly ListBox _channels = new ListBox();
-        private readonly ListBox _members = new ListBox();
         private readonly PictureBox _brandMark = new PictureBox();
         private readonly Label _roomTitle = new Label();
         private readonly Label _roomPresence = new Label();
@@ -438,7 +437,7 @@ namespace Maela
             _toolTip.SetToolTip(_joinRoomButton, "Join with a room code");
             sidebar.Controls.Add(_joinRoomButton);
 
-            Label channels = MakeLabel("VOICE CHANNELS", 8F, FontStyle.Bold, TextMuted);
+            Label channels = MakeLabel("CHANNELS", 8F, FontStyle.Bold, TextMuted);
             channels.Location = new Point(14, 128);
             sidebar.Controls.Add(channels);
 
@@ -452,14 +451,17 @@ namespace Maela
             _toolTip.SetToolTip(_addChannelButton, "Create voice channel");
             sidebar.Controls.Add(_addChannelButton);
 
+            const int bottomBlock = 476; // Sidebar y where the status/action block starts at the default height.
+            int bottomShift = sidebar.Height - 680;
             _channels.Location = new Point(8, 151);
-            _channels.Size = new Size(238, 136);
+            _channels.Size = new Size(238, bottomBlock + bottomShift - 8 - 151);
+            _channels.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
             _channels.BackColor = Sidebar;
             _channels.BorderStyle = BorderStyle.None;
-            _channels.DrawMode = DrawMode.OwnerDrawFixed;
-            _channels.ItemHeight = 36;
+            _channels.DrawMode = DrawMode.OwnerDrawVariable;
             _channels.IntegralHeight = false;
             _channels.ForeColor = TextMain;
+            _channels.MeasureItem += ChannelsMeasureItem;
             _channels.DrawItem += ChannelsDrawItem;
             _channels.MouseDoubleClick += ChannelsDoubleClick;
             _channels.MouseDown += ChannelsMouseDown;
@@ -467,55 +469,35 @@ namespace Maela
             BuildChannelContextMenu();
 
             _connectionStatus.AutoSize = false;
-            _connectionStatus.Location = new Point(16, 296);
+            _connectionStatus.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _connectionStatus.Location = new Point(16, bottomBlock + bottomShift);
             _connectionStatus.Size = new Size(220, 36);
             _connectionStatus.ForeColor = TextMuted;
             _connectionStatus.Text = "Not connected";
             sidebar.Controls.Add(_connectionStatus);
 
             StylePrimaryButton(_roomAction, "Join Room");
-            _roomAction.Location = new Point(14, 340);
+            _roomAction.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _roomAction.Location = new Point(14, bottomBlock + bottomShift + 40);
             _roomAction.Size = new Size(226, 34);
             _roomAction.Click += RoomActionClicked;
             sidebar.Controls.Add(_roomAction);
 
             StyleSecondaryButton(_leaveButton, "Leave Voice");
-            _leaveButton.Location = new Point(14, 382);
+            _leaveButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _leaveButton.Location = new Point(14, bottomBlock + bottomShift + 40);
             _leaveButton.Size = new Size(226, 32);
             _leaveButton.Visible = false;
             _leaveButton.Click += LeaveClicked;
             sidebar.Controls.Add(_leaveButton);
 
             StyleSecondaryButton(_stopRoomButton, "Leave Room");
-            _stopRoomButton.Location = new Point(14, 421);
+            _stopRoomButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _stopRoomButton.Location = new Point(14, bottomBlock + bottomShift + 78);
             _stopRoomButton.Size = new Size(226, 32);
             _stopRoomButton.Visible = false;
             _stopRoomButton.Click += StopRoomClicked;
             sidebar.Controls.Add(_stopRoomButton);
-
-            Label inviteHeader = MakeLabel("ROOM CODE", 8F, FontStyle.Bold, TextMuted);
-            inviteHeader.Location = new Point(14, 468);
-            sidebar.Controls.Add(inviteHeader);
-
-            _inviteLabel.AutoSize = false;
-            _inviteLabel.Location = new Point(14, 487);
-            _inviteLabel.Size = new Size(226, 38);
-            _inviteLabel.ForeColor = TextMuted;
-            _inviteLabel.Text = "No room code yet";
-            sidebar.Controls.Add(_inviteLabel);
-
-            StyleSecondaryButton(_copyInvite, "Copy code");
-            _copyInvite.Location = new Point(14, 529);
-            _copyInvite.Size = new Size(110, 30);
-            _copyInvite.Click += CopyInviteClicked;
-            sidebar.Controls.Add(_copyInvite);
-
-            _networkLabel.AutoSize = false;
-            _networkLabel.Location = new Point(14, 565);
-            _networkLabel.Size = new Size(226, 48);
-            _networkLabel.ForeColor = TextMuted;
-            _networkLabel.Text = "Network idle";
-            sidebar.Controls.Add(_networkLabel);
 
             Panel userBar = new Panel();
             userBar.Height = 62;
@@ -582,37 +564,51 @@ namespace Maela
             main.Controls.Add(top);
 
             _voiceTitle.AutoSize = true;
-            _voiceTitle.Location = new Point(22, 17);
+            _voiceTitle.Location = new Point(22, 9);
             _voiceTitle.Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold, GraphicsUnit.Point);
             _voiceTitle.ForeColor = TextMain;
-            _voiceTitle.Text = "General";
+            _voiceTitle.Text = "m\u00E6la";
             top.Controls.Add(_voiceTitle);
 
             _memberCount.AutoSize = false;
-            _memberCount.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _memberCount.TextAlign = ContentAlignment.MiddleRight;
-            _memberCount.Location = new Point(514, 18);
-            _memberCount.Size = new Size(180, 20);
+            _memberCount.Location = new Point(24, 34);
+            _memberCount.Size = new Size(260, 18);
             _memberCount.ForeColor = TextMuted;
-            _memberCount.Text = "0 connected";
+            _memberCount.Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point);
+            _memberCount.Text = String.Empty;
             top.Controls.Add(_memberCount);
 
-            Label memberHeader = MakeLabel("IN VOICE", 8F, FontStyle.Bold, TextMuted);
-            memberHeader.Location = new Point(24, 80);
-            main.Controls.Add(memberHeader);
+            int topWidth = main.Width;
+            StyleSecondaryButton(_copyInvite, "Copy code");
+            _copyInvite.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _copyInvite.Location = new Point(topWidth - 116, 13);
+            _copyInvite.Size = new Size(98, 32);
+            _copyInvite.Click += CopyInviteClicked;
+            top.Controls.Add(_copyInvite);
 
-            _members.Location = new Point(18, 104);
-            _members.Size = new Size(680, ClientSize.Height - 138);
-            _members.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            _members.BackColor = MainBg;
-            _members.ForeColor = TextMain;
-            _members.BorderStyle = BorderStyle.None;
-            _members.DrawMode = DrawMode.OwnerDrawFixed;
-            _members.ItemHeight = 58;
-            _members.IntegralHeight = false;
-            _members.DrawItem += MembersDrawItem;
-            _members.MouseDown += MembersMouseDown;
-            main.Controls.Add(_members);
+            _inviteLabel.AutoSize = false;
+            _inviteLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _inviteLabel.TextAlign = ContentAlignment.MiddleRight;
+            _inviteLabel.Location = new Point(topWidth - 366, 10);
+            _inviteLabel.Size = new Size(240, 20);
+            _inviteLabel.Font = new Font("Consolas", 9.5F, FontStyle.Regular, GraphicsUnit.Point);
+            _inviteLabel.ForeColor = TextMain;
+            _inviteLabel.Text = "No room code yet";
+            top.Controls.Add(_inviteLabel);
+
+            _networkLabel.AutoSize = false;
+            _networkLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _networkLabel.TextAlign = ContentAlignment.MiddleRight;
+            _networkLabel.AutoEllipsis = true;
+            _networkLabel.Location = new Point(topWidth - 366, 31);
+            _networkLabel.Size = new Size(240, 18);
+            _networkLabel.Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point);
+            _networkLabel.ForeColor = TextMuted;
+            _networkLabel.Text = "Network idle";
+            _networkLabel.TextChanged += delegate { _toolTip.SetToolTip(_networkLabel, _networkLabel.Text); };
+            top.Controls.Add(_networkLabel);
+
+            BuildChatArea(main, top.Height);
             BuildMemberContextMenu();
         }
 
@@ -690,9 +686,14 @@ namespace Maela
             if (index < 0 || index >= _channels.Items.Count)
                 return;
 
-            _channels.SelectedIndex = index;
-            _contextChannel = _channels.Items[index] as VoiceChannelInfo;
-            if (e.Button == MouseButtons.Right && _contextChannel != null)
+            object item = _channels.Items[index];
+            _contextChannel = item as VoiceChannelInfo;
+            _contextMember = item as RoomMemberInfo;
+            if (e.Button != MouseButtons.Right)
+                return;
+            if (_contextMember != null)
+                _memberMenu.Show(_channels, e.Location);
+            else if (_contextChannel != null && _contextChannel.Id > 0)
                 _channelMenu.Show(_channels, e.Location);
         }
 
@@ -702,9 +703,23 @@ namespace Maela
             if (index < 0 || index >= _channels.Items.Count || _engine == null || !_engine.IsConnected)
                 return;
 
-            VoiceChannelInfo channel = _channels.Items[index] as VoiceChannelInfo;
+            object item = _channels.Items[index];
+            VoiceChannelInfo channel = item as VoiceChannelInfo;
+            RoomMemberInfo member = item as RoomMemberInfo;
+            int target = channel != null ? channel.Id : (member != null ? member.ChannelId : -1);
+            if (target >= 0 && target != _engine.LocalChannelId)
+                _engine.ChangeChannel(target); // Double-click a channel or a person to join them.
+        }
+
+        private void ChannelsMeasureItem(object sender, MeasureItemEventArgs e)
+        {
+            if (e.Index < 0 || e.Index >= _channels.Items.Count)
+                return;
+            VoiceChannelInfo channel = _channels.Items[e.Index] as VoiceChannelInfo;
             if (channel != null)
-                _engine.ChangeChannel(channel.Id);
+                e.ItemHeight = channel.Id == 0 ? 30 : 34;
+            else
+                e.ItemHeight = 30;
         }
 
         private void AddChannelClicked(object sender, EventArgs e)
@@ -777,31 +792,126 @@ namespace Maela
 
         private void ChannelsDrawItem(object sender, DrawItemEventArgs e)
         {
-            e.DrawBackground();
             if (e.Index < 0 || e.Index >= _channels.Items.Count)
                 return;
+            object item = _channels.Items[e.Index];
+            Graphics g = e.Graphics;
 
-            VoiceChannelInfo channel = _channels.Items[e.Index] as VoiceChannelInfo;
-            if (channel == null)
+            VoiceChannelInfo channel = item as VoiceChannelInfo;
+            if (channel != null)
+            {
+                DrawChannelRow(g, e.Bounds, channel);
                 return;
+            }
 
-            bool active = _engine != null && _engine.LocalChannelId == channel.Id;
-            Color back = active ? Selected : Sidebar;
-            using (SolidBrush b = new SolidBrush(back))
-                e.Graphics.FillRectangle(b, e.Bounds);
+            RoomMemberInfo member = item as RoomMemberInfo;
+            using (SolidBrush b = new SolidBrush(Sidebar))
+                g.FillRectangle(b, e.Bounds);
+            if (member != null)
+                DrawMemberRow(g, e.Bounds, member);
+        }
+
+        private void DrawChannelRow(Graphics g, Rectangle bounds, VoiceChannelInfo channel)
+        {
+            bool active = channel.Id > 0 && _engine != null && _engine.LocalChannelId == channel.Id;
+            using (SolidBrush b = new SolidBrush(Sidebar))
+                g.FillRectangle(b, bounds);
+
+            if (channel.Id == 0)
+            {
+                using (Font f = new Font("Segoe UI", 7.5F, FontStyle.Bold, GraphicsUnit.Point))
+                    TextRenderer.DrawText(g, "LOBBY  \u2014  NOT IN VOICE", f, new Point(bounds.Left + 8, bounds.Top + 12), TextMuted, TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                return;
+            }
+
+            Rectangle pill = new Rectangle(bounds.Left + 2, bounds.Top + 2, bounds.Width - 4, bounds.Height - 4);
+            if (active)
+            {
+                using (SolidBrush b = new SolidBrush(Selected))
+                    g.FillRectangle(b, pill);
+            }
 
             Color text = active ? TextMain : Color.FromArgb(181, 186, 193);
-            using (Font f = new Font("Segoe UI Semibold", 9F, FontStyle.Bold, GraphicsUnit.Point))
-            using (SolidBrush b = new SolidBrush(text))
-                e.Graphics.DrawString("#  " + channel.Name, f, b, e.Bounds.Left + 8, e.Bounds.Top + 9);
+            DrawSpeakerIcon(g, bounds.Left + 9, bounds.Top + bounds.Height / 2, text);
+            using (Font f = new Font("Segoe UI Semibold", 9.5F, FontStyle.Bold, GraphicsUnit.Point))
+                TextRenderer.DrawText(g, channel.Name, f, new Rectangle(bounds.Left + 36, bounds.Top, bounds.Width - 70, bounds.Height), text,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
 
-            string count = channel.MemberCount.ToString();
-            using (Font f = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point))
-            using (SolidBrush b = new SolidBrush(TextMuted))
+            if (channel.MemberCount > 0)
             {
-                SizeF size = e.Graphics.MeasureString(count, f);
-                e.Graphics.DrawString(count, f, b, e.Bounds.Right - size.Width - 9, e.Bounds.Top + 10);
+                string count = channel.MemberCount.ToString();
+                using (Font f = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point))
+                    TextRenderer.DrawText(g, count, f, new Rectangle(bounds.Right - 40, bounds.Top, 30, bounds.Height), TextMuted,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.NoPadding);
             }
+        }
+
+        private void DrawMemberRow(Graphics g, Rectangle bounds, RoomMemberInfo member)
+        {
+            int left = bounds.Left + 30;
+            int centerY = bounds.Top + bounds.Height / 2;
+            Rectangle avatar = new Rectangle(left, centerY - 11, 22, 22);
+
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (SolidBrush b = new SolidBrush(ColorForName(member.Name)))
+                g.FillEllipse(b, avatar);
+            if (member.IsSpeaking)
+            {
+                using (Pen p = new Pen(Good, 2F))
+                    g.DrawEllipse(p, avatar.Left - 2, avatar.Top - 2, avatar.Width + 4, avatar.Height + 4);
+            }
+            g.SmoothingMode = SmoothingMode.Default;
+
+            string initial = member.Name.Length > 0 ? member.Name.Substring(0, 1).ToUpperInvariant() : "?";
+            using (Font f = new Font("Segoe UI Semibold", 8F, FontStyle.Bold, GraphicsUnit.Point))
+                TextRenderer.DrawText(g, initial, f, avatar, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+            string tag = String.Empty;
+            Color tagColor = TextMuted;
+            if (!member.IsLocal && _engine != null && _engine.GetPeerMuted(member.Id))
+            {
+                tag = "muted";
+                tagColor = Danger;
+            }
+            else if (member.IsLocal && _muted)
+            {
+                tag = "mic off";
+                tagColor = Danger;
+            }
+            else if (member.IsHost)
+                tag = "HOST";
+
+            int tagWidth = 0;
+            if (tag.Length > 0)
+            {
+                using (Font f = new Font("Segoe UI", 7F, FontStyle.Bold, GraphicsUnit.Point))
+                {
+                    tagWidth = TextRenderer.MeasureText(g, tag, f, Size.Empty, TextFormatFlags.NoPadding).Width + 8;
+                    TextRenderer.DrawText(g, tag, f, new Rectangle(bounds.Right - tagWidth - 6, bounds.Top, tagWidth, bounds.Height), tagColor,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.NoPadding);
+                }
+            }
+
+            Color nameColor = member.IsSpeaking || member.IsLocal ? TextMain : Color.FromArgb(181, 186, 193);
+            using (Font f = new Font("Segoe UI", 9F, member.IsLocal ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Point))
+                TextRenderer.DrawText(g, member.Name, f, new Rectangle(avatar.Right + 8, bounds.Top, bounds.Right - avatar.Right - 16 - tagWidth, bounds.Height), nameColor,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+        }
+
+        private static void DrawSpeakerIcon(Graphics g, int x, int centerY, Color color)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (SolidBrush b = new SolidBrush(color))
+            {
+                g.FillRectangle(b, x, centerY - 3, 4, 6);
+                g.FillPolygon(b, new Point[] { new Point(x + 3, centerY - 3), new Point(x + 9, centerY - 7), new Point(x + 9, centerY + 7), new Point(x + 3, centerY + 3) });
+            }
+            using (Pen p = new Pen(color, 1.4F))
+            {
+                g.DrawArc(p, x + 7, centerY - 4, 6, 8, -60, 120);
+                g.DrawArc(p, x + 7, centerY - 7, 10, 14, -60, 120);
+            }
+            g.SmoothingMode = SmoothingMode.Default;
         }
 
         private void SaveHostedChannelLayout()
@@ -1187,7 +1297,6 @@ namespace Maela
             _engine.LeaveVoice();
             _lastMemberSnapshot = String.Empty;
             _lastSpeakingSnapshot = String.Empty;
-            _members.Items.Clear();
             UpdateSelectedRoomUi();
         }
 
@@ -1213,7 +1322,6 @@ namespace Maela
             _lastMemberSnapshot = String.Empty;
             _lastSpeakingSnapshot = String.Empty;
             _lastChannelSnapshot = String.Empty;
-            _members.Items.Clear();
             _channels.Items.Clear();
             // After leaving a joined room, probe it once more so its status and
             // member count reflect the room without us.
@@ -1344,16 +1452,16 @@ namespace Maela
                     channelName = "Voice";
                 _voiceTitle.Text = channelName;
                 _memberCount.Text = engine.LocalChannelId == 0
-                    ? engine.MemberCount + " in room"
-                    : engine.CurrentChannelMemberCount + (engine.CurrentChannelMemberCount == 1 ? " in channel" : " in channel");
+                    ? engine.MemberCount + " in " + _activeRoomName + "  \u2022  join a channel to talk and chat"
+                    : engine.CurrentChannelMemberCount + " in voice  \u2022  " + _activeRoomName;
 
                 _leaveButton.Visible = engine.IsConnected && engine.IsInVoice;
                 _leaveButton.Text = engine.IsHost
-                    ? (_keepRoomAlive ? "Leave Voice (keep room up)" : "Leave Voice & Stop Room")
+                    ? (_keepRoomAlive ? "Leave Voice (keep room up)" : "Leave Voice && Stop Room")
                     : "Leave Voice";
-                _stopRoomButton.Visible = engine.IsConnected;
-                _stopRoomButton.Text = engine.IsHost ? "Stop Room" : "Leave Room";
-                _roomAction.Enabled = false;
+                _stopRoomButton.Visible = true;
+                _stopRoomButton.Text = engine.IsHost ? "Stop Room" : (engine.IsConnected ? "Leave Room" : "Cancel");
+                _roomAction.Visible = false;
                 _hostRoomButton.Enabled = false;
                 _joinRoomButton.Enabled = false;
                 _addChannelButton.Enabled = engine.IsHost;
@@ -1387,20 +1495,19 @@ namespace Maela
                 }
 
                 UpdateChannelRows(engine);
-                UpdateMemberRows(engine);
             }
             else
             {
                 _leaveButton.Visible = false;
                 _stopRoomButton.Visible = false;
+                _roomAction.Visible = true;
                 _roomAction.Enabled = _selectedRoom != null;
+                _memberCount.Text = String.Empty;
                 _hostRoomButton.Enabled = true;
                 _joinRoomButton.Enabled = true;
                 _addChannelButton.Enabled = false;
                 _memberCount.Text = "0 connected";
                 _voiceTitle.Text = "Voice";
-                if (_members.Items.Count > 0)
-                    _members.Items.Clear();
                 if (_channels.Items.Count > 0)
                     _channels.Items.Clear();
                 if (!_muted)
@@ -1410,6 +1517,7 @@ namespace Maela
                 }
             }
 
+            RefreshChat(engine);
             RefreshLocalPresence();
             if (!_presenceScanRunning)
                 BeginPresenceScan();
@@ -1473,77 +1581,114 @@ namespace Maela
                 BeginPresenceScan();
         }
 
+        /// <summary>
+        /// Builds the sidebar tree: each voice channel followed by the people in it, then a
+        /// Lobby section for anyone connected but not in a channel.
+        /// </summary>
         private void UpdateChannelRows(VoipEngine engine)
         {
             VoiceChannelInfo[] channels = engine.GetChannels();
-            StringBuilder snapshotBuilder = new StringBuilder();
-            int i;
-            for (i = 0; i < channels.Length; i++)
-                snapshotBuilder.Append(channels[i].Id).Append('|').Append(channels[i].Name).Append('|').Append(channels[i].MemberCount).Append(';');
-            snapshotBuilder.Append("L=").Append(engine.LocalChannelId);
+            RoomMemberInfo[] members = engine.GetAllMembers();
 
-            string snapshot = snapshotBuilder.ToString();
-            if (String.Equals(snapshot, _lastChannelSnapshot, StringComparison.Ordinal))
-                return;
-
-            _lastChannelSnapshot = snapshot;
-            _channels.BeginUpdate();
-            _channels.Items.Clear();
-            int selectedIndex = -1;
-            for (i = 0; i < channels.Length; i++)
-            {
-                _channels.Items.Add(channels[i]);
-                if (channels[i].Id == engine.LocalChannelId)
-                    selectedIndex = i;
-            }
-            _channels.EndUpdate();
-            if (selectedIndex >= 0)
-                _channels.SelectedIndex = selectedIndex;
-            _channels.Invalidate();
-
-            if (engine.IsHost)
-                SaveHostedChannelLayout();
-        }
-
-        private void UpdateMemberRows(VoipEngine engine)
-        {
-            RoomMemberInfo[] members = engine.GetMembers();
+            StringBuilder channelSnapshot = new StringBuilder();
             StringBuilder identity = new StringBuilder();
             StringBuilder speaking = new StringBuilder();
             int i;
+            for (i = 0; i < channels.Length; i++)
+                channelSnapshot.Append(channels[i].Id).Append('|').Append(channels[i].Name).Append(';');
+            identity.Append(channelSnapshot).Append("L=").Append(engine.LocalChannelId).Append(';');
             for (i = 0; i < members.Length; i++)
             {
                 identity.Append(members[i].Id).Append('|').Append(members[i].Name).Append('|')
                     .Append(members[i].ChannelId).Append('|')
-                    .Append(members[i].IsLocal ? '1' : '0').Append('|').Append(members[i].IsHost ? '1' : '0').Append(';');
+                    .Append(members[i].IsLocal ? '1' : '0').Append(members[i].IsHost ? '1' : '0').Append(';');
                 speaking.Append(members[i].Id).Append('|').Append(members[i].IsSpeaking ? '1' : '0').Append(';');
             }
 
-            string identitySnapshot = identity.ToString();
-            string speakingSnapshot = speaking.ToString();
-            if (!String.Equals(identitySnapshot, _lastMemberSnapshot, StringComparison.Ordinal))
+            string channelKey = channelSnapshot.ToString();
+            string identityKey = identity.ToString();
+            string speakingKey = speaking.ToString();
+
+            if (!String.Equals(identityKey, _lastMemberSnapshot, StringComparison.Ordinal))
             {
-                _lastMemberSnapshot = identitySnapshot;
-                _lastSpeakingSnapshot = speakingSnapshot;
-                _members.BeginUpdate();
-                _members.Items.Clear();
-                for (i = 0; i < members.Length; i++)
-                    _members.Items.Add(members[i]);
-                _members.EndUpdate();
-            }
-            else if (!String.Equals(speakingSnapshot, _lastSpeakingSnapshot, StringComparison.Ordinal))
-            {
-                _lastSpeakingSnapshot = speakingSnapshot;
-                for (i = 0; i < members.Length && i < _members.Items.Count; i++)
+                _lastMemberSnapshot = identityKey;
+                _lastSpeakingSnapshot = speakingKey;
+                int topIndex = _channels.TopIndex;
+                _channels.BeginUpdate();
+                _channels.Items.Clear();
+                for (i = 0; i < channels.Length; i++)
                 {
-                    RoomMemberInfo current = _members.Items[i] as RoomMemberInfo;
-                    if (current != null && current.Id == members[i].Id && current.IsSpeaking != members[i].IsSpeaking)
+                    _channels.Items.Add(channels[i]);
+                    AddMembersInChannel(members, channels[i].Id);
+                }
+                int lobbyCount = 0;
+                for (i = 0; i < members.Length; i++)
+                {
+                    if (members[i].ChannelId <= 0 || !ChannelExists(channels, members[i].ChannelId))
+                        lobbyCount++;
+                }
+                if (lobbyCount > 0)
+                {
+                    VoiceChannelInfo lobby = new VoiceChannelInfo();
+                    lobby.Id = 0;
+                    lobby.Name = "Lobby";
+                    lobby.MemberCount = lobbyCount;
+                    _channels.Items.Add(lobby);
+                    for (i = 0; i < members.Length; i++)
                     {
-                        current.IsSpeaking = members[i].IsSpeaking;
-                        _members.Invalidate(_members.GetItemRectangle(i));
+                        if (members[i].ChannelId <= 0 || !ChannelExists(channels, members[i].ChannelId))
+                            _channels.Items.Add(members[i]);
+                    }
+                }
+                _channels.EndUpdate();
+                if (topIndex > 0 && topIndex < _channels.Items.Count)
+                    _channels.TopIndex = topIndex;
+            }
+            else if (!String.Equals(speakingKey, _lastSpeakingSnapshot, StringComparison.Ordinal))
+            {
+                _lastSpeakingSnapshot = speakingKey;
+                Dictionary<uint, bool> speakingById = new Dictionary<uint, bool>();
+                for (i = 0; i < members.Length; i++)
+                    speakingById[members[i].Id] = members[i].IsSpeaking;
+                for (i = 0; i < _channels.Items.Count; i++)
+                {
+                    RoomMemberInfo row = _channels.Items[i] as RoomMemberInfo;
+                    bool now;
+                    if (row != null && speakingById.TryGetValue(row.Id, out now) && row.IsSpeaking != now)
+                    {
+                        row.IsSpeaking = now;
+                        _channels.Invalidate(_channels.GetItemRectangle(i));
                     }
                 }
             }
+
+            if (!String.Equals(channelKey, _lastChannelSnapshot, StringComparison.Ordinal))
+            {
+                _lastChannelSnapshot = channelKey;
+                if (engine.IsHost)
+                    SaveHostedChannelLayout();
+            }
+        }
+
+        private void AddMembersInChannel(RoomMemberInfo[] members, int channelId)
+        {
+            int i;
+            for (i = 0; i < members.Length; i++)
+            {
+                if (members[i].ChannelId == channelId)
+                    _channels.Items.Add(members[i]);
+            }
+        }
+
+        private static bool ChannelExists(VoiceChannelInfo[] channels, int id)
+        {
+            int i;
+            for (i = 0; i < channels.Length; i++)
+            {
+                if (channels[i].Id == id)
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -1650,12 +1795,12 @@ namespace Maela
             if (_engine != null && _engine.IsRunning)
             {
                 _roomTitle.Text = _activeRoomName;
-                _voiceTitle.Text = "General  \u2022  " + _activeRoomName;
+                _voiceTitle.Text = _activeRoomName;
                 _networkLabel.Text = _engine.IsHost ? _natStatus : "Connected to room";
             }
             else
             {
-                _voiceTitle.Text = "General";
+                _voiceTitle.Text = room == null ? "m\u00E6la" : room.Name;
                 _connectionStatus.Text = "Not connected";
                 _connectionStatus.ForeColor = TextMuted;
                 _networkLabel.Text = room == null ? "Network idle" : (room.Owned ? "Host this room to refresh its room code." : "Status is checked when m\u00E6la starts and when you leave. Right-click the room to check again.");
@@ -1763,19 +1908,6 @@ namespace Maela
             _memberMenu.Opening += MemberMenuOpening;
         }
 
-        private void MembersMouseDown(object sender, MouseEventArgs e)
-        {
-            if (e.Button != MouseButtons.Right)
-                return;
-            int index = _members.IndexFromPoint(e.Location);
-            if (index < 0 || index >= _members.Items.Count)
-                return;
-            _members.SelectedIndex = index;
-            _contextMember = _members.Items[index] as RoomMemberInfo;
-            if (_contextMember != null)
-                _memberMenu.Show(_members, e.Location);
-        }
-
         private void MemberMenuOpening(object sender, CancelEventArgs e)
         {
             _memberMenu.Items.Clear();
@@ -1806,7 +1938,7 @@ namespace Maela
                 if (_engine != null)
                 {
                     _engine.SetPeerMuted(member.Id, mute.Checked);
-                    _members.Invalidate();
+                    _channels.Invalidate();
                 }
             };
             _memberMenu.Items.Add(mute);
@@ -1877,57 +2009,7 @@ namespace Maela
             if (item == null || _contextMember == null || _engine == null)
                 return;
             _engine.SetPeerVolumePercent(_contextMember.Id, (int)item.Tag);
-            _members.Invalidate();
-        }
-
-        private void MembersDrawItem(object sender, DrawItemEventArgs e)
-        {
-            e.DrawBackground();
-            if (e.Index < 0 || e.Index >= _members.Items.Count)
-                return;
-            RoomMemberInfo member = _members.Items[e.Index] as RoomMemberInfo;
-            if (member == null)
-                return;
-
-            bool selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
-            Color row = selected ? Selected : MainBg;
-            using (SolidBrush b = new SolidBrush(row))
-                e.Graphics.FillRectangle(b, e.Bounds);
-
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            Rectangle avatar = new Rectangle(e.Bounds.Left + 12, e.Bounds.Top + 9, 40, 40);
-            using (SolidBrush b = new SolidBrush(Color.FromArgb(88, 91, 96)))
-                e.Graphics.FillEllipse(b, avatar);
-            if (member.IsSpeaking)
-            {
-                using (Pen p = new Pen(Good, 3F))
-                    e.Graphics.DrawEllipse(p, avatar.Left - 2, avatar.Top - 2, avatar.Width + 4, avatar.Height + 4);
-            }
-
-            string initial = member.Name.Length > 0 ? member.Name.Substring(0, 1).ToUpperInvariant() : "?";
-            using (Font f = new Font("Segoe UI Semibold", 11F, FontStyle.Bold, GraphicsUnit.Point))
-            using (SolidBrush b = new SolidBrush(TextMain))
-            {
-                SizeF s = e.Graphics.MeasureString(initial, f);
-                e.Graphics.DrawString(initial, f, b, avatar.Left + (avatar.Width - s.Width) / 2F, avatar.Top + (avatar.Height - s.Height) / 2F - 1F);
-            }
-
-            string label = member.Name + (member.IsLocal ? "  (you)" : String.Empty);
-            using (Font f = new Font("Segoe UI Semibold", 10F, FontStyle.Bold, GraphicsUnit.Point))
-            using (SolidBrush b = new SolidBrush(member.IsSpeaking ? TextMain : Color.FromArgb(219, 222, 225)))
-                e.Graphics.DrawString(label, f, b, e.Bounds.Left + 66, e.Bounds.Top + 11);
-
-            string sub;
-            if (member.IsHost)
-                sub = "Host";
-            else if (!member.IsLocal && _engine != null)
-                sub = _engine.GetPeerMuted(member.Id) ? "Muted locally" : "Volume " + _engine.GetPeerVolumePercent(member.Id) + "%";
-            else
-                sub = member.IsSpeaking ? "Speaking" : "Connected";
-
-            using (Font f = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point))
-            using (SolidBrush b = new SolidBrush(member.IsSpeaking ? Good : TextMuted))
-                e.Graphics.DrawString(sub, f, b, e.Bounds.Left + 66, e.Bounds.Top + 32);
+            _channels.Invalidate();
         }
 
         private void MainFormClosing(object sender, FormClosingEventArgs e)
@@ -2876,7 +2958,7 @@ namespace Maela
             AddField("Display name", 26, 96);
             _name.Location = new Point(26, 118); _name.Size = new Size(300, 26); StyleText(_name); _name.Text = _preferences.DisplayName; Controls.Add(_name);
 
-            Label voice = MakeLabel("VOICE & AUDIO", 8F, FontStyle.Bold, Color.FromArgb(148,155,164)); voice.Location = new Point(26, 174); Controls.Add(voice);
+            Label voice = MakeLabel("VOICE && AUDIO", 8F, FontStyle.Bold, Color.FromArgb(148,155,164)); voice.Location = new Point(26, 174); Controls.Add(voice);
             AddField("Input device", 26, 198); AddField("Output device", 352, 198);
             StyleCombo(_input); _input.Location = new Point(26, 220); _input.Size = new Size(300, 26); Controls.Add(_input);
             StyleCombo(_output); _output.Location = new Point(352, 220); _output.Size = new Size(300, 26); Controls.Add(_output);
@@ -2907,7 +2989,7 @@ namespace Maela
 
             Label note = MakeLabel("Input/output device changes apply the next time you connect.", 8F, FontStyle.Regular, Color.FromArgb(148,155,164)); note.Location = new Point(26, 597); Controls.Add(note);
 
-            Button close = MakeButton("Save & Close", true); close.Location = new Point(520, 590); close.Size = new Size(132, 34); close.Click += SaveClicked; Controls.Add(close); AcceptButton = close;
+            Button close = MakeButton("Save && Close", true); close.Location = new Point(520, 590); close.Size = new Size(132, 34); close.Click += SaveClicked; Controls.Add(close); AcceptButton = close;
         }
 
         private void SaveClicked(object sender, EventArgs e)
@@ -3309,7 +3391,7 @@ namespace Maela
         }
     }
 
-    internal sealed class VoipEngine : IDisposable
+    internal sealed partial class VoipEngine : IDisposable
     {
         public const int MaxRoomMembers = 6;
 
@@ -3368,6 +3450,10 @@ namespace Maela
         private string _localName;
         private string _roomName = "Voice Room";
         private int _localChannelId;
+        private int _requestedChannelId = -1;
+        private int _channelRequestAttempts;
+        private DateTime _channelRequestSentUtc;
+        private DateTime _lastPeerListBroadcastUtc;
         private int _nextChannelId = 2;
         private int _masterVolumePercent = 100;
         private int _micVolumePercent = 100;
@@ -3383,6 +3469,13 @@ namespace Maela
 
         private IntPtr _waveIn = IntPtr.Zero;
         private WaveInProc _waveInProc;
+
+        /// <summary>Tests only: run without opening audio devices.</summary>
+        internal bool HeadlessForTests { get; set; }
+
+        /// <summary>Tests only: fraction (0-1) of outgoing packets to drop, to exercise retries.</summary>
+        internal double PacketLossForTests { get; set; }
+        private readonly Random _testLossRandom = new Random(1234);
 
         public bool IsRunning { get { return _running; } }
         public bool IsHost { get { return _isHost; } }
@@ -3502,6 +3595,17 @@ namespace Maela
 
         public RoomMemberInfo[] GetMembers()
         {
+            return GetMembers(true);
+        }
+
+        /// <summary>Every member in the room, whatever channel they are in.</summary>
+        public RoomMemberInfo[] GetAllMembers()
+        {
+            return GetMembers(false);
+        }
+
+        private RoomMemberInfo[] GetMembers(bool currentChannelOnly)
+        {
             lock (_stateLock)
             {
                 List<RoomMemberInfo> result = new List<RoomMemberInfo>();
@@ -3512,7 +3616,7 @@ namespace Maela
                     if (!_memberChannels.TryGetValue(pair.Key, out channelId))
                         channelId = 0;
 
-                    if (_localChannelId > 0 && channelId != _localChannelId)
+                    if (currentChannelOnly && _localChannelId > 0 && channelId != _localChannelId)
                         continue;
 
                     RoomMemberInfo info = new RoomMemberInfo();
@@ -3566,8 +3670,7 @@ namespace Maela
             }
             else if (_connected && _hostEndpoint != null)
             {
-                byte[] payload = BitConverter.GetBytes(channelId);
-                SendPacket(_hostEndpoint, PacketChannelSwitch, _localId, 0, payload);
+                RequestChannel(channelId);
             }
         }
 
@@ -3830,7 +3933,8 @@ namespace Maela
                 _socket.Bind(new IPEndPoint(IPAddress.Any, port));
                 IPEndPoint boundEndpoint = _socket.LocalEndPoint as IPEndPoint;
                 _boundPort = boundEndpoint == null ? port : boundEndpoint.Port;
-                OpenWaveIn();
+                if (!HeadlessForTests)
+                    OpenWaveIn();
                 StartThreadsAndCapture();
             }
             catch
@@ -3861,7 +3965,8 @@ namespace Maela
             {
                 CreateSocket();
                 _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-                OpenWaveIn();
+                if (!HeadlessForTests)
+                    OpenWaveIn();
                 StartThreadsAndCapture();
                 SendJoin();
             }
@@ -3884,6 +3989,7 @@ namespace Maela
             _boundPort = 0;
             _hostId = 0;
             _localChannelId = 0;
+            _requestedChannelId = -1;
             _nextChannelId = 2;
             _reconnectAllowed = true;
 
@@ -3900,6 +4006,7 @@ namespace Maela
                 _lastMessage = String.Empty;
             }
 
+            ResetChat();
             DisposePlaybackStreams();
         }
 
@@ -3926,6 +4033,8 @@ namespace Maela
             _maintenanceThread.Name = "Maela room maintenance";
             _maintenanceThread.Start();
 
+            if (_waveIn == IntPtr.Zero)
+                return; // Headless test mode.
             int result = NativeMethods.waveInStart(_waveIn);
             CheckMmResult(result, "Could not start the microphone");
         }
@@ -4057,6 +4166,9 @@ namespace Maela
             if (packet.Type == PacketKeepAlive)
                 return;
 
+            if (HandleHostChatPacket(known, packet))
+                return;
+
             if (packet.Type == PacketLeave)
             {
                 RemoveHostParticipant(key, true);
@@ -4128,8 +4240,7 @@ namespace Maela
                 _connected = true;
                 _joinStartedUtc = DateTime.MinValue;
                 SetLastMessage(String.Empty);
-                if (_hostEndpoint != null)
-                    SendPacket(_hostEndpoint, PacketChannelSwitch, _localId, 0, BitConverter.GetBytes(1));
+                RequestChannel(1);
                 return;
             }
 
@@ -4163,6 +4274,9 @@ namespace Maela
                 ParsePeerList(packet.Payload);
                 return;
             }
+
+            if (HandleClientChatPacket(packet))
+                return;
 
             if (packet.Type == PacketAudio)
             {
@@ -4220,7 +4334,9 @@ namespace Maela
             for (i = 0; i < expired.Count; i++)
                 RemoveHostParticipant(expired[i], false);
 
-            if (expired.Count > 0)
+            // Also re-send periodically: peer lists travel over UDP and a lost one would
+            // otherwise leave clients with a stale member/channel view until the next change.
+            if (expired.Count > 0 || (now - _lastPeerListBroadcastUtc).TotalSeconds >= 3.0)
                 BroadcastPeerList();
         }
 
@@ -4255,11 +4371,43 @@ namespace Maela
                 if ((now - _lastJoinSentUtc).TotalMilliseconds >= 1000.0)
                     SendJoin();
             }
-            else if ((now - _lastKeepAliveUtc).TotalMilliseconds >= 1500.0)
+            else
             {
-                _lastKeepAliveUtc = now;
-                SendPacket(_hostEndpoint, PacketKeepAlive, _localId, 0, new byte[0]);
+                if (_requestedChannelId >= 0)
+                {
+                    if (_requestedChannelId == _localChannelId || _channelRequestAttempts >= 10)
+                        _requestedChannelId = -1; // Confirmed, or the host keeps refusing (e.g. channel deleted).
+                    else if ((now - _channelRequestSentUtc).TotalMilliseconds >= 600.0)
+                        SendChannelRequest();
+                }
+
+                bool keepAliveDue = (now - _lastKeepAliveUtc).TotalMilliseconds >= 1500.0;
+                if (keepAliveDue)
+                {
+                    _lastKeepAliveUtc = now;
+                    SendPacket(_hostEndpoint, PacketKeepAlive, _localId, 0, new byte[0]);
+                }
+                ClientChatMaintenance(now, keepAliveDue);
             }
+        }
+
+        /// <summary>Asks the host to move us; re-sent by maintenance until the peer list confirms it.</summary>
+        private void RequestChannel(int channelId)
+        {
+            _requestedChannelId = channelId;
+            _channelRequestAttempts = 0;
+            SendChannelRequest();
+        }
+
+        private void SendChannelRequest()
+        {
+            int channelId = _requestedChannelId;
+            if (channelId < 0)
+                return;
+            _channelRequestAttempts++;
+            _channelRequestSentUtc = DateTime.UtcNow;
+            if (_hostEndpoint != null)
+                SendPacket(_hostEndpoint, PacketChannelSwitch, _localId, 0, BitConverter.GetBytes(channelId));
         }
 
         private void SendJoin()
@@ -4299,6 +4447,7 @@ namespace Maela
 
         private void BroadcastPeerList()
         {
+            _lastPeerListBroadcastUtc = DateTime.UtcNow;
             byte[] payload = BuildPeerListPayload();
             List<IPEndPoint> targets = new List<IPEndPoint>();
 
@@ -4740,6 +4889,14 @@ namespace Maela
         {
             if (!_running || _socket == null || target == null || raw == null)
                 return;
+            if (PacketLossForTests > 0.0)
+            {
+                lock (_testLossRandom)
+                {
+                    if (_testLossRandom.NextDouble() < PacketLossForTests)
+                        return;
+                }
+            }
 
             try
             {
@@ -4948,6 +5105,8 @@ namespace Maela
             public IPEndPoint Endpoint;
             public DateTime LastSeenUtc;
             public int ChannelId;
+            public DateTime LastChatUtc;
+            public readonly Queue<uint> RecentChatIds = new Queue<uint>();
         }
     }
 

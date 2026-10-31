@@ -9,5 +9,5 @@ For changes:
 3. Keep network protocol changes versioned and reject incompatible packets safely.
 4. Do not expose raw network endpoints in the normal user interface.
 5. Test host, join, leave, tray persistence, saved-room probing and multi-channel voice before release.
-6. Run `scripts\test_ci.cmd` after touching `src/EchoCanceller.cs`; CI runs it on every push.
+6. Run `scripts\test_ci.cmd` after touching audio or networking code; CI runs it on every push.
 7. Bump `VERSION` and add a CHANGELOG entry to release. Do not edit assembly version attributes by hand; the build generates them from `VERSION`.

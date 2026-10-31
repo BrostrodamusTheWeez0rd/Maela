@@ -17,4 +17,12 @@ if errorlevel 1 exit /b 1
 
 "obj\EchoCancellerTests.exe"
 if errorlevel 1 exit /b 1
+
+echo.
+echo Building chat tests...
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\ChatTests.exe" /main:Maela.Tests.ChatTests /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll "src\*.cs" "tests\ChatTests.cs"
+if errorlevel 1 exit /b 1
+
+"obj\ChatTests.exe"
+if errorlevel 1 exit /b 1
 exit /b 0

@@ -17,7 +17,8 @@ Current release: **0.7.0**.
 - Best-effort UPnP mapping and public IPv4 discovery
 - Short checksummed room codes such as `M-XXXX-XXXX-XXXXX`
 - Saved rooms with online/offline probing
-- Multiple voice channels inside a room
+- Multiple voice channels inside a room, each with its own text chat
+- Discord-style sidebar showing who is in which channel
 - Lobby state with no voice transmission
 - Persistent-host mode that can keep the room server alive in the tray
 - Per-user local volume and mute
@@ -33,6 +34,12 @@ Current release: **0.7.0**.
 The host clicks **Host**, waits for mæla to finish network setup, then copies the generated **room code**. Friends paste that code into **Join**.
 
 Room codes intentionally keep raw IP addresses and ports out of the normal UI. Because mæla has no rendezvous server, a room code still encodes the network endpoint needed to reach the host. The code is obfuscated and checksummed for usability; it is **not** an anonymity or encryption mechanism.
+
+## Text chat
+
+Every voice channel has a text chat. Join a channel and its chat fills the main window; anything you type there is shared with everyone in that channel. People who join later get the recent history (the host keeps the last 200 messages per channel while the room is running).
+
+Chat travels over the same direct connection as voice. Messages are numbered by the host and re-sent automatically if a packet is lost, so everyone sees the same messages in the same order.
 
 ## Echo cancellation
 
@@ -80,7 +87,9 @@ assets/                  Logo, mark and Windows icon
 src/Maela.cs             Application, UI and networking
 src/EchoCanceller.cs     Acoustic echo canceller
 src/Updater.cs           GitHub Releases auto-updater
-tests/                   Echo canceller regression test
+src/VoipEngine.Chat.cs   Chat protocol
+src/MainForm.Chat.cs     Chat view
+tests/                   Echo canceller and chat tests
 scripts/build_ci.cmd      Non-interactive CI build
 scripts/test_ci.cmd       Build and run the tests
 .github/workflows/        GitHub build/release automation
@@ -100,7 +109,7 @@ The program currently uses IPv4 for room codes and voice transport.
 
 ## Security status
 
-This project is still an early lightweight voice client. Voice traffic is **not yet end-to-end encrypted**. Treat room codes like connection details and share them only with people you intend to invite.
+This project is still an early lightweight voice client. Voice and chat traffic is **not yet end-to-end encrypted**. Treat room codes like connection details and share them only with people you intend to invite.
 
 See `docs/NETWORKING.md` for more detail.
 
