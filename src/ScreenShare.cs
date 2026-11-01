@@ -32,6 +32,12 @@ namespace Maela
         public volatile int BitrateKbps;
         public volatile string Method = String.Empty;
         public Size OutputSize;
+        private I420Frame _preview;
+        private long _previewAt;
+        private readonly object _previewLock = new object();
+
+        /// <summary>A copy of what you're sending, about 10 times a second (for your own preview).</summary>
+        public I420Frame LatestPreview { get { lock (_previewLock) return _preview; } }
 
         public ScreenShareSender(VoipEngine engine, ShareSettings settings)
         {
@@ -100,6 +106,15 @@ namespace Maela
                         FrameScaler.ToI420(bits, stride, w, h, frame, ref scratch);
                     });
                     if (fresh) haveFrame = true;
+                    if (fresh && frame != null && (long)now - _previewAt >= 100)
+                    {
+                        _previewAt = (long)now;
+                        I420Frame copy = new I420Frame(frame.Width, frame.Height);
+                        Buffer.BlockCopy(frame.Y, 0, copy.Y, 0, frame.Y.Length);
+                        Buffer.BlockCopy(frame.U, 0, copy.U, 0, frame.U.Length);
+                        Buffer.BlockCopy(frame.V, 0, copy.V, 0, frame.V.Length);
+                        lock (_previewLock) _preview = copy;
+                    }
                     if (!haveFrame || frame == null)
                         continue;
                     if (_engine.StreamViewerCount == 0)

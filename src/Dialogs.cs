@@ -472,7 +472,7 @@ namespace Maela
 
             AddSection("App");
             _closeToTray = AddToggle("Keep running in the tray when closed", "Closing the window keeps you in your room. Right-click the tray icon to quit.", _preferences.CloseToTray);
-            _directStreams = AddToggle("Connect directly for screen sharing", "Best quality. The person sharing or watching sees your IP address. Off: always go through the host.", _preferences.AllowDirectStreams);
+            _directStreams = AddToggle("Connect directly for screen sharing", "Off (default): streams go through the host, so nobody sees your IP. On: best quality, but the person sharing or watching sees your IP.", _preferences.AllowDirectStreams);
 
             AddSection("Updates");
             _autoUpdate = AddToggle("Check for updates automatically", "mæla " + Updater.CurrentVersionText + " · updates come from GitHub releases", _preferences.AutoUpdate);

@@ -92,8 +92,21 @@ namespace Maela
             RefreshShell(engine);
         }
 
+        private SharePreviewForm _preview;
+
+        private void ShowSharePreview()
+        {
+            if (_shareSender == null)
+                return;
+            if (_preview != null && !_preview.IsDisposed) { _preview.Activate(); return; }
+            ScreenShareSender sender = _shareSender;
+            _preview = new SharePreviewForm(delegate { return sender.LatestPreview; });
+            _preview.Show(this);
+        }
+
         private void StopSharing()
         {
+            if (_preview != null && !_preview.IsDisposed) _preview.Close();
             if (_shareSender != null)
             {
                 _shareSender.Dispose();
@@ -216,7 +229,7 @@ namespace Maela
             if (_preferences.StreamNoticeShown || !_preferences.AllowDirectStreams)
                 return true;
             DialogResult answer = MessageBox.Show(this,
-                "Screen sharing connects you straight to the people sharing or watching, for the best quality. " +
+                "You turned on direct connections for screen sharing: the best quality, but you connect straight to the people sharing or watching. " +
                 "That means they can see your IP address (nobody else in the room can).\r\n\r\n" +
                 "Yes: connect directly (recommended).\r\nNo: always go through the host instead (lower quality, keeps your IP private).\r\n\r\n" +
                 "You can change this later in Settings.",
@@ -362,10 +375,60 @@ namespace Maela
         }
     }
 
+    /// <summary>Your own stream, as sent (drawn from your own frames; nothing is decoded).</summary>
+    internal sealed class SharePreviewForm : Form
+    {
+        private readonly Func<I420Frame> _source;
+        private readonly System.Windows.Forms.Timer _timer = new System.Windows.Forms.Timer();
+        private Bitmap _bitmap;
+        private I420Frame _shown;
+
+        public SharePreviewForm(Func<I420Frame> source)
+        {
+            _source = source;
+            Text = "Your stream · preview";
+            BackColor = Color.Black;
+            ClientSize = new Size(480, 270);
+            StartPosition = FormStartPosition.CenterParent;
+            ShowInTaskbar = false;
+            try { Icon = Branding.LoadAppIcon(); } catch { }
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            _timer.Interval = 100;
+            _timer.Tick += delegate { Refresh(); };
+            _timer.Start();
+            FormClosed += delegate { _timer.Dispose(); if (_bitmap != null) _bitmap.Dispose(); };
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Color.Black);
+            I420Frame f = _source();
+            if (f != null && !Object.ReferenceEquals(f, _shown))
+            {
+                _shown = f;
+                if (_bitmap == null || _bitmap.Width != f.Width || _bitmap.Height != f.Height)
+                {
+                    if (_bitmap != null) _bitmap.Dispose();
+                    _bitmap = new Bitmap(f.Width, f.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                }
+                System.Drawing.Imaging.BitmapData d = _bitmap.LockBits(new Rectangle(0, 0, f.Width, f.Height), System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                try { ColorConvert.I420ToBgra(f, d.Scan0, d.Stride); }
+                finally { _bitmap.UnlockBits(d); }
+            }
+            if (_bitmap == null)
+                return;
+            double s = Math.Min((double)ClientSize.Width / _bitmap.Width, (double)ClientSize.Height / _bitmap.Height);
+            int w = (int)(_bitmap.Width * s), h = (int)(_bitmap.Height * s);
+            e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+            e.Graphics.DrawImage(_bitmap, (ClientSize.Width - w) / 2, (ClientSize.Height - h) / 2, w, h);
+        }
+    }
+
     /// <summary>Red bar across the top while you're live, with Stop.</summary>
     internal sealed class LiveBar : Control
     {
         public readonly FlatButton StopButton = new FlatButton();
+        public readonly FlatButton PreviewButton = new FlatButton();
 
         public LiveBar()
         {
@@ -375,12 +438,17 @@ namespace Maela
             StopButton.Text = "Stop sharing";
             StopButton.Size = new Size(120, 28);
             Controls.Add(StopButton);
+            PreviewButton.Look = ButtonLook.Secondary;
+            PreviewButton.Text = "Preview";
+            PreviewButton.Size = new Size(90, 28);
+            Controls.Add(PreviewButton);
         }
 
         protected override void OnLayout(LayoutEventArgs e)
         {
             base.OnLayout(e);
             StopButton.Location = new Point(Width - StopButton.Width - 12, 6);
+            PreviewButton.Location = new Point(StopButton.Left - PreviewButton.Width - 8, 6);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -388,9 +456,10 @@ namespace Maela
             Theme t = Theme.Current;
             e.Graphics.Clear(t.Danger);
             StopButton.Underlay = t.Danger;
+            PreviewButton.Underlay = t.Danger;
             using (SolidBrush dot = new SolidBrush(Color.White))
                 e.Graphics.FillEllipse(dot, 16, 15, 10, 10);
-            Ui.DrawText(e.Graphics, Text, Ui.BodyBold, new Rectangle(34, 0, Width - 180, Height), Color.White, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+            Ui.DrawText(e.Graphics, Text, Ui.BodyBold, new Rectangle(34, 0, Width - 280, Height), Color.White, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
         }
     }
 }

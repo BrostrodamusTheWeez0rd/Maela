@@ -187,6 +187,7 @@ namespace Maela
             _liveBar.Dock = DockStyle.Top;
             _liveBar.Visible = false;
             _liveBar.StopButton.Click += delegate { StopSharing(); RefreshShell(_engine); };
+            _liveBar.PreviewButton.Click += delegate { ShowSharePreview(); };
             _main.Controls.Add(_liveBar);
             _liveBar.SendToBack(); // Above the header.
 

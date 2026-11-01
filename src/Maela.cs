@@ -447,7 +447,7 @@ namespace Maela
         public bool TrayHintShown;
         public string IconRefreshedFor = String.Empty;
         public string Status = String.Empty;
-        public bool AllowDirectStreams = true;
+        public bool AllowDirectStreams; // Off: streams go through the host, so nobody learns your IP.
         public bool StreamNoticeShown;
         public int ShareHeight = 1080;
         public int ShareFps = 60;
@@ -564,7 +564,7 @@ namespace Maela
                     {
                         p.TrayHintShown = value == "1";
                     }
-                    else if (key == "directstreams")
+                    else if (key == "directstreams2")
                         p.AllowDirectStreams = value != "0";
                     else if (key == "streamnotice")
                         p.StreamNoticeShown = value == "1";
@@ -618,7 +618,7 @@ namespace Maela
                     "trayhint=" + (p.TrayHintShown ? "1" : "0"),
                     "iconver=" + (p.IconRefreshedFor ?? String.Empty),
                     "status=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(p.Status ?? String.Empty)),
-                    "directstreams=" + (p.AllowDirectStreams ? "1" : "0"),
+                    "directstreams2=" + (p.AllowDirectStreams ? "1" : "0"),
                     "streamnotice=" + (p.StreamNoticeShown ? "1" : "0"),
                     "shareheight=" + p.ShareHeight,
                     "sharefps=" + p.ShareFps
