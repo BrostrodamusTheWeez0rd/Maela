@@ -1,12 +1,11 @@
 # Changelog
 
-## 0.9.1 - Stream preview, private by default
+## 0.9.1 - Stream preview
 
 - **Preview your own stream**: the Preview button on the red live bar shows exactly what
   you're sending.
-- **Screen sharing now goes through the host by default**, so nobody learns anyone else's IP
-  address (the same privacy as voice and chat). Direct connections, for the best quality,
-  are an opt-in in Settings > App.
+- Settings > App explains the screen-sharing choice more clearly: direct (default, best
+  quality; the people you stream with can see your IP) or always through the host.
 
 ## 0.9.0 - Screen sharing
 

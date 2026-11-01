@@ -447,7 +447,7 @@ namespace Maela
         public bool TrayHintShown;
         public string IconRefreshedFor = String.Empty;
         public string Status = String.Empty;
-        public bool AllowDirectStreams; // Off: streams go through the host, so nobody learns your IP.
+        public bool AllowDirectStreams = true; // Off: streams go through the host, so viewers don't learn your IP.
         public bool StreamNoticeShown;
         public int ShareHeight = 1080;
         public int ShareFps = 60;

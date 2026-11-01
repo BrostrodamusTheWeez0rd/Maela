@@ -229,7 +229,7 @@ namespace Maela
             if (_preferences.StreamNoticeShown || !_preferences.AllowDirectStreams)
                 return true;
             DialogResult answer = MessageBox.Show(this,
-                "You turned on direct connections for screen sharing: the best quality, but you connect straight to the people sharing or watching. " +
+                "Screen sharing connects you straight to the people sharing or watching, for the best quality. " +
                 "That means they can see your IP address (nobody else in the room can).\r\n\r\n" +
                 "Yes: connect directly (recommended).\r\nNo: always go through the host instead (lower quality, keeps your IP private).\r\n\r\n" +
                 "You can change this later in Settings.",
