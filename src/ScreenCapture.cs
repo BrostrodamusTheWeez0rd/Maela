@@ -37,6 +37,12 @@ namespace Maela
         public static List<CaptureSource> Windows()
         {
             List<CaptureSource> list = new List<CaptureSource>();
+            try { AddWindows(list); } catch { } // If Windows won't list them, offer screens only.
+            return list;
+        }
+
+        private static void AddWindows(List<CaptureSource> list)
+        {
             int self = System.Diagnostics.Process.GetCurrentProcess().Id;
             CaptureNative.EnumWindows(delegate(IntPtr hwnd, IntPtr lParam)
             {
@@ -68,7 +74,6 @@ namespace Maela
                 list.Add(s);
                 return true;
             }, IntPtr.Zero);
-            return list;
         }
     }
 
