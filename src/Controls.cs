@@ -377,11 +377,16 @@ namespace Maela
         }
     }
 
-    /// <summary>"Voice connected" card at the bottom of the sidebar.</summary>
+    /// <summary>
+    /// Connection card at the bottom of the sidebar: noise filter, Leave voice (stay in the
+    /// room) and Disconnect (leave the room). Leave voice only shows while you're in voice.
+    /// </summary>
     internal sealed class VoiceCard : Control
     {
         public readonly FlatButton NoiseButton = new FlatButton();
         public readonly FlatButton LeaveButton = new FlatButton();
+        public readonly FlatButton DisconnectButton = new FlatButton();
+        private bool _inVoice;
         private string _status = String.Empty;
         private string _detail = String.Empty;
         private int _ping = -1;
@@ -395,17 +400,31 @@ namespace Maela
             NoiseButton.Icon = IconKind.Waves;
             NoiseButton.Text = "Noise filter";
             NoiseButton.Height = 32;
-            LeaveButton.Look = ButtonLook.Danger;
+            LeaveButton.Look = ButtonLook.Secondary;
             LeaveButton.Icon = IconKind.Leave;
             LeaveButton.IconSize = 18;
-            LeaveButton.Text = "Leave";
-            LeaveButton.Height = 32;
+            LeaveButton.Text = String.Empty;
+            LeaveButton.Size = new Size(36, 32);
+            DisconnectButton.Look = ButtonLook.Danger;
+            DisconnectButton.Icon = IconKind.Disconnect;
+            DisconnectButton.IconSize = 18;
+            DisconnectButton.Text = String.Empty;
+            DisconnectButton.Size = new Size(36, 32);
             Controls.Add(NoiseButton);
             Controls.Add(LeaveButton);
+            Controls.Add(DisconnectButton);
         }
 
-        public void SetState(string status, string detail, int pingMs, bool connected, bool noiseOn)
+        public void SetState(string status, string detail, int pingMs, bool connected, bool noiseOn, bool inVoice)
         {
+            if (inVoice != _inVoice || LeaveButton.Visible != inVoice)
+            {
+                _inVoice = inVoice;
+                LeaveButton.Visible = inVoice;
+                NoiseButton.Visible = inVoice;
+                PerformLayout();
+                Invalidate();
+            }
             if (status == _status && detail == _detail && pingMs == _ping && connected == _connected && NoiseButton.Look == (noiseOn ? ButtonLook.Soft : ButtonLook.Secondary))
                 return;
             _status = status;
@@ -420,9 +439,21 @@ namespace Maela
         protected override void OnLayout(LayoutEventArgs e)
         {
             base.OnLayout(e);
-            int w = (Width - 24 - 8) / 2;
-            NoiseButton.SetBounds(12, 52, w, 32);
-            LeaveButton.SetBounds(12 + w + 8, 52, w, 32);
+            // [ Noise filter ......... ] [Leave voice] [Disconnect]
+            int right = Width - 12;
+            if (!_inVoice)
+            {
+                DisconnectButton.SetBounds(right - 36, 12, 36, 32); // Beside the status line.
+                return;
+            }
+            DisconnectButton.SetBounds(right - 36, 52, 36, 32);
+            right -= 36 + 6;
+            if (_inVoice)
+            {
+                LeaveButton.SetBounds(right - 36, 52, 36, 32);
+                right -= 36 + 8;
+            }
+            NoiseButton.SetBounds(12, 52, Math.Max(40, right - 12), 32);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -433,15 +464,17 @@ namespace Maela
             Ui.FillRound(g, t.Surface, new RectangleF(0, 0, Width, Height), 14);
             NoiseButton.Underlay = t.Surface;
             LeaveButton.Underlay = t.Surface;
+            DisconnectButton.Underlay = t.Surface;
 
             Color signal = !_connected ? t.Muted : (_ping < 0 || _ping < 90 ? t.Good : (_ping < 180 ? Color.FromArgb(240, 178, 50) : t.Danger));
             Icons.Draw(g, IconKind.Signal, new RectangleF(12, 13, 18, 18), signal);
             Ui.DrawText(g, _status, Ui.SmallBold, new Point(38, 10), _connected ? t.Good : t.Text2);
             string detail = _detail + (_ping >= 0 ? "  ·  " + _ping + " ms" : String.Empty);
-            Ui.DrawText(g, detail, Ui.Small, new Rectangle(38, 28, Width - 46, 16), t.Muted, TextFormatFlags.Left);
+            Ui.DrawText(g, detail, Ui.Small, new Rectangle(38, 28, Width - (_inVoice ? 46 : 94), 16), t.Muted, TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
 
-            Icons.Draw(g, IconKind.Lock, new RectangleF(12, 93, 12, 12), t.Muted);
-            Ui.DrawText(g, "Encrypted · echo cancellation", Ui.Small, new Rectangle(28, 92, Width - 36, 16), t.Muted, TextFormatFlags.Left);
+            int lockY = Height - 25;
+            Icons.Draw(g, IconKind.Lock, new RectangleF(12, lockY + 1, 12, 12), t.Muted);
+            Ui.DrawText(g, _inVoice ? "Encrypted · echo cancellation" : "Encrypted", Ui.Small, new Rectangle(28, lockY, Width - 36, 16), t.Muted, TextFormatFlags.Left);
         }
     }
 

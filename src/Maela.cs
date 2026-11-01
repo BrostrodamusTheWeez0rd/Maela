@@ -95,7 +95,21 @@ namespace Maela
     internal sealed class SingleInstance : IDisposable
     {
         private const string Name = "Local\\Maela-7d1f6a52-single-instance";
-        public static readonly int ShowMessage = RegisterWindowMessage("Maela-7d1f6a52-show");
+        /// <summary>Window message that asks the running copy to show itself (-1 if unavailable).</summary>
+        public static readonly int ShowMessage = RegisterShowMessage();
+
+        private static int RegisterShowMessage()
+        {
+            try
+            {
+                int id = RegisterWindowMessage("Maela-7d1f6a52-show");
+                return id == 0 ? -1 : id;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
         private Mutex _mutex;
 
         public static SingleInstance Acquire(int waitMs)
@@ -1320,6 +1334,24 @@ namespace Maela
         {
             get { return _micVolumePercent; }
             set { _micVolumePercent = Clamp(value, 0, 150); }
+        }
+
+        /// <summary>People in a voice channel (those who left voice aren't counted).</summary>
+        public int VoiceMemberCount
+        {
+            get
+            {
+                lock (_stateLock)
+                {
+                    int count = 0;
+                    foreach (KeyValuePair<uint, int> pair in _memberChannels)
+                    {
+                        if (pair.Value > 0 && _memberNames.ContainsKey(pair.Key))
+                            count++;
+                    }
+                    return count;
+                }
+            }
         }
 
         public int MemberCount

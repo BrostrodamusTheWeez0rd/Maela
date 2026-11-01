@@ -166,8 +166,9 @@ namespace Maela
         /// <summary>Called from the UI timer. Rebuilds the chat view only when something changed.</summary>
         private void RefreshChat(VoipEngine engine)
         {
-            bool inChannel = engine != null && engine.IsRunning && engine.IsConnected && engine.LocalChannelId > 0;
-            int channel = inChannel ? engine.LocalChannelId : 0;
+            // Chat shows the highlighted channel (one click), whether or not you're in its voice.
+            bool inChannel = engine != null && engine.IsRunning && engine.IsConnected && engine.ChatChannelId > 0;
+            int channel = inChannel ? engine.ChatChannelId : 0;
             string channelName = inChannel ? engine.GetChannelName(channel) : String.Empty;
             if (String.IsNullOrWhiteSpace(channelName))
                 channelName = "channel";
@@ -175,7 +176,7 @@ namespace Maela
             _chatInput.Enabled = inChannel;
             _sendButton.Enabled = inChannel;
             _emojiButton.Enabled = inChannel;
-            SetChatCue(inChannel ? "Message #" + channelName : "Join a voice channel to chat");
+            SetChatCue(inChannel ? "Message #" + channelName : "Pick a channel to chat");
 
             string key = (engine == null ? "none" : engine.GetHashCode().ToString()) + "|" + channel + "|" +
                 (inChannel ? engine.ChatVersion : 0) + "|" + _chatList.ClientSize.Width + "|" + channelName + "|" + _chatFilter + "|" + _systemLines.Count + "|" + Theme.Current.Id;
@@ -193,7 +194,7 @@ namespace Maela
                 _chatNewestSeen = 0;
                 if (engine != null && engine.IsRunning)
                     ShowChatEmpty(engine.IsConnected
-                        ? "You're in the room lobby.\r\nDouble-click a channel on the left to talk and chat with the people in it."
+                        ? "Click a channel on the left to read its chat.\r\nDouble-click a voice channel to talk."
                         : (String.IsNullOrEmpty(engine.LastMessage) ? "Connecting…" : engine.LastMessage));
                 else
                     _chatEmpty.Visible = false;

@@ -347,6 +347,14 @@ namespace Maela
             object item = _channels.Items[index];
             _contextChannel = item as VoiceChannelInfo;
             _contextMember = item as RoomMemberInfo;
+            if (e.Button == MouseButtons.Left && _contextChannel != null && _engine != null && _engine.IsConnected)
+            {
+                // One click opens the channel's chat; double-click joins its voice.
+                _engine.ViewChannel(_contextChannel.Id);
+                _channels.Invalidate();
+                RefreshShell(_engine);
+                return;
+            }
             if (e.Button != MouseButtons.Right)
                 return;
             if (_contextMember != null)
@@ -365,19 +373,15 @@ namespace Maela
             VoiceChannelInfo channel = item as VoiceChannelInfo;
             RoomMemberInfo member = item as RoomMemberInfo;
             int target = channel != null ? channel.Id : (member != null ? member.ChannelId : -1);
-            if (target >= 0 && target != _engine.LocalChannelId)
-                _engine.ChangeChannel(target); // Double-click a channel or a person to join them.
+            if (target > 0 && target != _engine.LocalChannelId && !_engine.IsTextChannel(target))
+                _engine.ChangeChannel(target); // Double-click a voice channel or a person to join them.
         }
 
         private void ChannelsMeasureItem(object sender, MeasureItemEventArgs e)
         {
             if (e.Index < 0 || e.Index >= _channels.Items.Count)
                 return;
-            VoiceChannelInfo channel = _channels.Items[e.Index] as VoiceChannelInfo;
-            if (channel != null)
-                e.ItemHeight = channel.Id == 0 ? 34 : 38;
-            else
-                e.ItemHeight = 34;
+            e.ItemHeight = _channels.Items[e.Index] is VoiceChannelInfo ? 38 : 34;
         }
 
         private void AddChannelClicked(object sender, EventArgs e)
@@ -385,11 +389,26 @@ namespace Maela
             if (_engine == null || !_engine.IsHost)
                 return;
 
-            string name = TextPrompt.Show(this, "Create voice channel", "Channel name", "New Channel");
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.Renderer = new ThemedMenuRenderer();
+            menu.ShowImageMargin = false;
+            menu.Items.Add("Voice channel", null, delegate { CreateChannelPrompt(false); });
+            menu.Items.Add("Chat-only channel", null, delegate { CreateChannelPrompt(true); });
+            menu.Closed += delegate { BeginInvoke((MethodInvoker)menu.Dispose); };
+            menu.Show(_addChannelButton, new Point(0, _addChannelButton.Height));
+        }
+
+        private void CreateChannelPrompt(bool textOnly)
+        {
+            if (_engine == null || !_engine.IsHost)
+                return;
+            string name = TextPrompt.Show(this, textOnly ? "Create chat-only channel" : "Create voice channel", "Channel name", textOnly ? "chat" : "New Channel");
             if (String.IsNullOrWhiteSpace(name))
                 return;
 
-            _engine.CreateChannel(name);
+            int id = _engine.CreateChannel(name, textOnly);
+            if (id > 0)
+                _engine.ViewChannel(id);
             SaveHostedChannelLayout();
         }
 
@@ -408,10 +427,13 @@ namespace Maela
             heading.Enabled = false;
             _channelMenu.Items.Add(heading);
 
-            ToolStripMenuItem join = new ToolStripMenuItem(engine.LocalChannelId == channel.Id ? "Current channel" : "Join channel");
-            join.Enabled = engine.LocalChannelId != channel.Id;
-            join.Click += delegate { if (_engine != null) _engine.ChangeChannel(channel.Id); };
-            _channelMenu.Items.Add(join);
+            if (!channel.IsText)
+            {
+                ToolStripMenuItem join = new ToolStripMenuItem(engine.LocalChannelId == channel.Id ? "In voice here" : "Join voice");
+                join.Enabled = engine.LocalChannelId != channel.Id;
+                join.Click += delegate { if (_engine != null) _engine.ChangeChannel(channel.Id); };
+                _channelMenu.Items.Add(join);
+            }
 
             if (engine.IsHost)
             {
@@ -422,7 +444,7 @@ namespace Maela
                 {
                     if (_engine == null || !_engine.IsHost)
                         return;
-                    string newName = TextPrompt.Show(this, "Rename voice channel", "Channel name", channel.Name);
+                    string newName = TextPrompt.Show(this, "Rename channel", "Channel name", channel.Name);
                     if (!String.IsNullOrWhiteSpace(newName))
                     {
                         _engine.RenameChannel(channel.Id, newName);
@@ -438,7 +460,7 @@ namespace Maela
                 {
                     if (_engine == null || !_engine.IsHost || channel.Id == 1)
                         return;
-                    if (MessageBox.Show(this, "Delete #" + channel.Name + "? Members in it will be moved to #General.", "Delete channel", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    if (MessageBox.Show(this, "Delete #" + channel.Name + "?" + (channel.IsText ? " Its chat history will be lost." : " People in it will be moved to the first channel."), "Delete channel", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     {
                         _engine.DeleteChannel(channel.Id);
                         SaveHostedChannelLayout();
@@ -472,31 +494,26 @@ namespace Maela
         private void DrawChannelRow(Graphics g, Rectangle bounds, VoiceChannelInfo channel)
         {
             Theme t = Theme.Current;
-            bool active = channel.Id > 0 && _engine != null && _engine.LocalChannelId == channel.Id;
+            // Open (highlighted) channel: filled; channel you're in voice in: accent icon.
+            bool inVoice = _engine != null && _engine.LocalChannelId == channel.Id;
+            bool open = _engine != null && _engine.ChatChannelId == channel.Id;
             using (SolidBrush b = new SolidBrush(t.Side))
                 g.FillRectangle(b, bounds);
 
-            if (channel.Id == 0)
-            {
-                Ui.DrawText(g, "LOBBY", Ui.Tiny, new Point(bounds.Left + 10, bounds.Top + 13), t.Muted);
-                return;
-            }
-
-            if (active)
+            if (open)
                 Ui.FillRound(g, t.AccentSoftSide, new RectangleF(bounds.Left, bounds.Top + 2, bounds.Width, bounds.Height - 4), 9);
 
-            Color text = active ? t.Text : t.Text2;
-            Icons.Draw(g, IconKind.Speaker, new RectangleF(bounds.Left + 10, bounds.Top + (bounds.Height - 18) / 2f, 18, 18), active ? t.Accent2 : t.Muted);
+            Color text = open || inVoice ? t.Text : t.Text2;
+            Icons.Draw(g, channel.IsText ? IconKind.Hash : IconKind.Speaker, new RectangleF(bounds.Left + 10, bounds.Top + (bounds.Height - 18) / 2f, 18, 18), inVoice ? t.Accent2 : t.Muted);
             Ui.DrawText(g, channel.Name, Ui.BodyBold, new Rectangle(bounds.Left + 36, bounds.Top, bounds.Width - 70, bounds.Height), text, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
-            if (channel.MemberCount > 0)
+            if (channel.MemberCount > 0 && !channel.IsText)
                 Ui.DrawText(g, channel.MemberCount.ToString(), Ui.Small, new Rectangle(bounds.Right - 34, bounds.Top, 24, bounds.Height), t.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
         }
 
         private void DrawMemberRow(Graphics g, Rectangle bounds, RoomMemberInfo member)
         {
             Theme t = Theme.Current;
-            bool inLobby = member.ChannelId <= 0;
-            int left = bounds.Left + (inLobby ? 10 : 36);
+            int left = bounds.Left + 36;
             Rectangle avatar = new Rectangle(left, bounds.Top + (bounds.Height - 24) / 2, 24, 24);
             Ui.DrawAvatar(g, avatar, member.Name, member.IsSpeaking, t.Side);
 
@@ -536,7 +553,7 @@ namespace Maela
             _activeSavedRoom.ChannelNames.Clear();
             int i;
             for (i = 0; i < channels.Length; i++)
-                _activeSavedRoom.ChannelNames.Add(channels[i].Name);
+                _activeSavedRoom.ChannelNames.Add((channels[i].IsText ? VoipEngine.TextChannelMarker : String.Empty) + channels[i].Name);
             SavedRoomStore.Save(_savedRooms);
         }
 
@@ -808,16 +825,29 @@ namespace Maela
             if (_engine == null || !_engine.IsRunning)
                 return;
 
-            if (_engine.IsHost && !_keepRoomAlive)
-            {
-                StopEngine();
-                return;
-            }
-
+            // Leave voice only: you stay in the room and can keep reading and typing in the
+            // highlighted channel. Use Disconnect to leave the room.
             _engine.LeaveVoice();
             _lastMemberSnapshot = String.Empty;
             _lastSpeakingSnapshot = String.Empty;
             UpdateSelectedRoomUi();
+        }
+
+        private string _lastDisconnectTip = String.Empty;
+
+        /// <summary>
+        /// Leaves the room completely. A host stops the room, after asking if anyone else is in it.
+        /// </summary>
+        private void DisconnectClicked(object sender, EventArgs e)
+        {
+            VoipEngine engine = _engine;
+            if (engine == null || !engine.IsRunning)
+                return;
+            if (engine.IsHost && engine.MemberCount > 1 &&
+                MessageBox.Show(this, "Stop the room for everyone? " + (engine.MemberCount - 1) + " other " + (engine.MemberCount == 2 ? "person is" : "people are") + " in it.",
+                    "Stop room", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            StopEngine();
         }
 
         private void StopRoomClicked(object sender, EventArgs e)
@@ -1028,8 +1058,8 @@ namespace Maela
         }
 
         /// <summary>
-        /// Builds the sidebar tree: each voice channel followed by the people in it, then a
-        /// Lobby section for anyone connected but not in a channel.
+        /// Builds the sidebar tree: each channel, with the people in its voice underneath.
+        /// People connected but not in voice aren't shown.
         /// </summary>
         private void UpdateChannelRows(VoipEngine engine)
         {
@@ -1043,7 +1073,9 @@ namespace Maela
             int i;
             for (i = 0; i < channels.Length; i++)
                 channelSnapshot.Append(channels[i].Id).Append('|').Append(channels[i].Name).Append(';');
-            identity.Append(channelSnapshot).Append("L=").Append(engine.LocalChannelId).Append(';');
+            identity.Append(channelSnapshot).Append("L=").Append(engine.LocalChannelId).Append(";V=").Append(engine.ChatChannelId).Append(';');
+            for (i = 0; i < channels.Length; i++)
+                identity.Append(channels[i].IsText ? 't' : 'v');
             for (i = 0; i < members.Length; i++)
             {
                 identity.Append(members[i].Id).Append('|').Append(members[i].Name).Append('|')
@@ -1069,25 +1101,7 @@ namespace Maela
                     _channels.Items.Add(channels[i]);
                     AddMembersInChannel(members, channels[i].Id);
                 }
-                int lobbyCount = 0;
-                for (i = 0; i < members.Length; i++)
-                {
-                    if (members[i].ChannelId <= 0 || !ChannelExists(channels, members[i].ChannelId))
-                        lobbyCount++;
-                }
-                if (lobbyCount > 0)
-                {
-                    VoiceChannelInfo lobby = new VoiceChannelInfo();
-                    lobby.Id = 0;
-                    lobby.Name = "Lobby";
-                    lobby.MemberCount = lobbyCount;
-                    _channels.Items.Add(lobby);
-                    for (i = 0; i < members.Length; i++)
-                    {
-                        if (members[i].ChannelId <= 0 || !ChannelExists(channels, members[i].ChannelId))
-                            _channels.Items.Add(members[i]);
-                    }
-                }
+                // People who left voice aren't listed: to everyone else they've left.
                 _channels.EndUpdate();
                 if (topIndex > 0 && topIndex < _channels.Items.Count)
                     _channels.TopIndex = topIndex;
@@ -1126,17 +1140,6 @@ namespace Maela
                 if (members[i].ChannelId == channelId)
                     _channels.Items.Add(members[i]);
             }
-        }
-
-        private static bool ChannelExists(VoiceChannelInfo[] channels, int id)
-        {
-            int i;
-            for (i = 0; i < channels.Length; i++)
-            {
-                if (channels[i].Id == id)
-                    return true;
-            }
-            return false;
         }
 
         /// <summary>

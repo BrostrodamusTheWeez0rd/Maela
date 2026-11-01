@@ -27,6 +27,7 @@ namespace Maela
         private readonly ListBox _channels = new ListBox();
         private readonly ActionPanel _actionPanel = new ActionPanel();
         private readonly VoiceCard _voiceCard = new VoiceCard();
+        private readonly Panel _cardHost = new Panel();
         private readonly UserBar _userBar = new UserBar();
         private readonly ChannelHeader _header = new ChannelHeader();
         private readonly HomePanel _home = new HomePanel();
@@ -61,6 +62,22 @@ namespace Maela
             };
             _rail.RoomClicked += delegate(SavedRoom room)
             {
+                // One room at a time: opening another room leaves the current one.
+                if (_engine != null && _engine.IsRunning && !Object.ReferenceEquals(room, _activeSavedRoom))
+                {
+                    string current = String.IsNullOrEmpty(_activeRoomName) ? "this room" : _activeRoomName;
+                    string question = _engine.IsHost
+                        ? "Stop " + current + " and open " + room.Name + "?" + (_engine.MemberCount > 1 ? " Everyone in " + current + " will be disconnected." : String.Empty)
+                        : "Leave " + current + " and join " + room.Name + "?";
+                    if (MessageBox.Show(this, question, "Switch room", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                        return;
+                    StopEngine();
+                    _selectedRoom = room;
+                    _rail.Selected = room;
+                    _rail.Invalidate();
+                    StartSelectedRoom();
+                    return;
+                }
                 _selectedRoom = room;
                 _rail.Selected = room;
                 _rail.Invalidate();
@@ -84,7 +101,7 @@ namespace Maela
             _userBar.SettingsButton.Click += SettingsClicked;
             _toolTip.SetToolTip(_userBar.DeafenButton, "Deafen: hear nobody and mute your mic");
             _toolTip.SetToolTip(_userBar.SettingsButton, "Settings");
-            Panel cardHost = new Panel();
+            Panel cardHost = _cardHost;
             cardHost.Dock = DockStyle.Bottom;
             cardHost.Height = 132;
             cardHost.Padding = new Padding(10, 4, 10, 10);
@@ -92,6 +109,8 @@ namespace Maela
             _voiceCard.Dock = DockStyle.Fill;
             _voiceCard.NoiseButton.Click += delegate { ToggleNoiseSuppression(); };
             _voiceCard.LeaveButton.Click += LeaveClicked;
+            _voiceCard.DisconnectButton.Click += DisconnectClicked;
+            _toolTip.SetToolTip(_voiceCard.LeaveButton, "Leave voice");
             _toolTip.SetToolTip(_voiceCard.NoiseButton, "Filter out steady background noise like fans or hum");
             cardHost.Controls.Add(_voiceCard);
             _actionPanel.Dock = DockStyle.Fill;
@@ -231,7 +250,7 @@ namespace Maela
             {
                 string line = !connected
                     ? (String.IsNullOrEmpty(engine.LastMessage) ? "Connecting…" : engine.LastMessage)
-                    : "Online · " + engine.MemberCount + " of " + VoipEngine.MaxRoomMembers + (engine.IsHost ? " · hosted by you" : String.Empty);
+                    : "Online · " + engine.VoiceMemberCount + " in voice" + (engine.IsHost ? " · hosted by you" : String.Empty);
                 _roomHeader.SetState(_activeRoomName, line, connected, connected);
             }
             else if (room != null)
@@ -239,17 +258,23 @@ namespace Maela
             else
                 _roomHeader.SetState("mæla", "Host a room or join one with a code", false, false);
 
-            // Voice card vs. action panel.
-            _voiceCard.Visible = inVoice;
-            _actionPanel.Visible = !inVoice;
-            if (inVoice)
+            // Connection card (while connected) vs. action panel.
+            _voiceCard.Visible = connected;
+            _actionPanel.Visible = !connected;
+            int cardHeight = connected && !inVoice ? 92 : 132; // Compact card when not in voice.
+            if (_cardHost.Height != cardHeight)
+                _cardHost.Height = cardHeight;
+            if (connected)
             {
-                string channelName = engine.GetChannelName(engine.LocalChannelId);
-                _voiceCard.SetState("Voice connected", channelName + " · " + _activeRoomName, engine.PingMs, true, engine.NoiseSuppression);
-                _voiceCard.LeaveButton.Text = engine.IsHost && !_keepRoomAlive ? "End" : "Leave";
+                string detail = inVoice ? engine.GetChannelName(engine.LocalChannelId) + " · " + _activeRoomName : _activeRoomName;
+                _voiceCard.SetState(inVoice ? "Voice connected" : "In the room", detail, engine.PingMs, true, engine.NoiseSuppression, inVoice);
+                string disconnectTip = engine.IsHost ? "Stop room" : "Disconnect";
+                if (disconnectTip != _lastDisconnectTip)
+                {
+                    _lastDisconnectTip = disconnectTip;
+                    _toolTip.SetToolTip(_voiceCard.DisconnectButton, disconnectTip);
+                }
             }
-            else if (connected)
-                _actionPanel.SetState("In the lobby", "Double-click a channel to join voice.", "Join " + FirstChannelName(engine), true, engine.IsHost ? "Stop room" : "Leave room");
             else if (running)
                 _actionPanel.SetState(engine.IsHost ? "Starting room…" : "Connecting…", engine.LastMessage, null, false, "Cancel");
             else if (room != null)
@@ -264,7 +289,7 @@ namespace Maela
             else if (_muted) { status = "Muted"; statusColor = t.Danger; }
             else if (inVoice && IsLocalSpeaking(engine)) { status = "● Speaking"; statusColor = t.Good; }
             else if (inVoice) { status = "Connected"; statusColor = t.Good; }
-            else if (connected) { status = "In the lobby"; statusColor = t.Muted; }
+            else if (connected) { status = "Not in voice"; statusColor = t.Muted; }
             else { status = "Ready"; statusColor = t.Muted; }
             _userBar.SetState(_preferences.DisplayName, status, statusColor, inVoice && IsLocalSpeaking(engine), _muted, _deafened);
             _toolTip.SetToolTip(_userBar.MuteButton, _muted ? "Unmute" : "Mute");
@@ -274,16 +299,24 @@ namespace Maela
             string code = RoomCode.IsValid(_activeInvite) ? _activeInvite : String.Empty;
             if (running && engine.IsHost && code.Length == 0)
                 code = String.Empty;
-            if (inVoice)
+            int open = connected ? engine.ChatChannelId : 0;
+            if (open > 0)
             {
-                string channelName = engine.GetChannelName(engine.LocalChannelId);
-                _header.SetState(channelName, engine.CurrentChannelMemberCount + " in voice", true, ChannelMemberNames(engine), code);
+                string channelName = engine.GetChannelName(open);
+                string sub;
+                if (engine.IsTextChannel(open))
+                    sub = "Chat-only channel";
+                else if (open == engine.LocalChannelId)
+                    sub = engine.CurrentChannelMemberCount + " in voice";
+                else
+                    sub = "Double-click to join voice";
+                _header.SetState(channelName, sub, open == engine.LocalChannelId, open == engine.LocalChannelId ? ChannelMemberNames(engine) : new string[0], code);
             }
             else if (running)
-                _header.SetState(_activeRoomName, connected ? "Room lobby" : "Connecting…", false, new string[0], code);
+                _header.SetState(_activeRoomName, connected ? String.Empty : "Connecting…", false, new string[0], code);
             else
                 _header.SetState(room == null ? "mæla" : room.Name, String.Empty, false, new string[0], String.Empty);
-            _header.Search.Visible = inVoice;
+            _header.Search.Visible = open > 0;
 
             string tip = running && engine.IsHost ? "Room code for invites · " + _natStatus : "Room code";
             if (tip != _lastHeaderTip)
