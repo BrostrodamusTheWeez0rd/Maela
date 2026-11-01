@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2 - Router fix
+
+- **Fixed: rooms not opening a port on the router automatically.** mæla now also asks the
+  router directly (Windows Firewall can silently drop the router's reply to a network-wide
+  request), tries every router that answers, and falls back to NAT-PMP, which many routers
+  support when UPnP doesn't answer.
+
 ## 0.9.1 - Stream preview
 
 - **Preview your own stream**: the Preview button on the red live bar shows exactly what

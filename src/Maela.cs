@@ -873,6 +873,9 @@ namespace Maela
         public string ExternalIp { get; private set; }
         public int ExternalPort { get { return _externalPort; } }
 
+        private IPAddress _natPmpGateway;
+        private int _natPmpInternalPort;
+
         private UpnpPortMapping(Uri controlUrl, string serviceType, int externalPort, string externalIp)
         {
             _controlUrl = controlUrl;
@@ -883,10 +886,17 @@ namespace Maela
 
         public static UpnpPortMapping TryCreate(int port, string internalClient)
         {
-            Uri location = DiscoverGatewayLocation();
-            if (location == null)
-                return null;
+            foreach (Uri location in DiscoverGatewayLocations())
+            {
+                UpnpPortMapping mapping = TryCreateAt(location, port, internalClient);
+                if (mapping != null)
+                    return mapping;
+            }
+            return TryNatPmp(port); // Many routers that don't answer UPnP speak NAT-PMP.
+        }
 
+        private static UpnpPortMapping TryCreateAt(Uri location, int port, string internalClient)
+        {
             string serviceType;
             Uri controlUrl;
             if (!FindWanService(location, out serviceType, out controlUrl))
@@ -939,6 +949,11 @@ namespace Maela
                 return;
             _disposed = true;
 
+            if (_natPmpGateway != null)
+            {
+                try { NatPmpRequest(_natPmpGateway, _natPmpInternalPort, 0, 0); } catch { }
+                return;
+            }
             try
             {
                 string body =
@@ -953,70 +968,158 @@ namespace Maela
             }
         }
 
-        private static Uri DiscoverGatewayLocation()
+        /// <summary>
+        /// Finds the router's UPnP description. Asks on the multicast address and also straight
+        /// at each default gateway: Windows Firewall lets a gateway's direct reply through even
+        /// when mæla has no firewall rule yet, while replies to multicast can be dropped.
+        /// </summary>
+        private static List<Uri> DiscoverGatewayLocations()
         {
             string[] searchTargets = new string[]
             {
                 "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
                 "urn:schemas-upnp-org:service:WANIPConnection:1",
-                "urn:schemas-upnp-org:service:WANPPPConnection:1"
+                "urn:schemas-upnp-org:service:WANPPPConnection:1",
+                "urn:schemas-upnp-org:device:InternetGatewayDevice:2",
+                "urn:schemas-upnp-org:service:WANIPConnection:2"
             };
+            List<IPEndPoint> targets = new List<IPEndPoint>();
+            targets.Add(new IPEndPoint(IPAddress.Parse("239.255.255.250"), 1900));
+            foreach (IPAddress gateway in Gateways())
+                targets.Add(new IPEndPoint(gateway, 1900));
 
-            int i;
-            for (i = 0; i < searchTargets.Length; i++)
+            List<Uri> found = new List<Uri>();
+            Socket socket = null;
+            try
             {
-                Socket socket = null;
-                try
+                socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                socket.ReceiveTimeout = 400;
+                socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+                try { socket.IOControl(unchecked((int)0x9800000C), new byte[4], null); } catch { } // Ignore ICMP errors.
+                for (int round = 0; round < 2; round++)
                 {
-                    socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                    socket.ReceiveTimeout = 1400;
-                    socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-
-                    string request =
-                        "M-SEARCH * HTTP/1.1\r\n" +
-                        "HOST: 239.255.255.250:1900\r\n" +
-                        "MAN: \"ssdp:discover\"\r\n" +
-                        "MX: 1\r\n" +
-                        "ST: " + searchTargets[i] + "\r\n\r\n";
-                    byte[] bytes = Encoding.ASCII.GetBytes(request);
-                    socket.SendTo(bytes, new IPEndPoint(IPAddress.Parse("239.255.255.250"), 1900));
-
-                    DateTime until = DateTime.UtcNow.AddMilliseconds(1500);
+                    foreach (string target in searchTargets)
+                    {
+                        byte[] bytes = Encoding.ASCII.GetBytes(
+                            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: " + target + "\r\n\r\n");
+                        foreach (IPEndPoint to in targets)
+                        {
+                            try { socket.SendTo(bytes, to); } catch { }
+                        }
+                    }
+                    DateTime until = DateTime.UtcNow.AddMilliseconds(1300);
                     byte[] buffer = new byte[8192];
                     while (DateTime.UtcNow < until)
                     {
                         EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
                         int count;
-                        try
-                        {
-                            count = socket.ReceiveFrom(buffer, ref remote);
-                        }
-                        catch (SocketException ex)
-                        {
-                            if (ex.SocketErrorCode == SocketError.TimedOut || ex.SocketErrorCode == SocketError.WouldBlock)
-                                break;
-                            throw;
-                        }
-
+                        try { count = socket.ReceiveFrom(buffer, ref remote); }
+                        catch (SocketException) { continue; } // Timeouts and stray errors: keep listening.
                         string response = Encoding.UTF8.GetString(buffer, 0, count);
                         string location = HeaderValue(response, "LOCATION");
                         Uri parsed;
-                        if (!String.IsNullOrWhiteSpace(location) && Uri.TryCreate(location.Trim(), UriKind.Absolute, out parsed))
-                            return parsed;
+                        if (!String.IsNullOrWhiteSpace(location) && Uri.TryCreate(location.Trim(), UriKind.Absolute, out parsed) && !found.Contains(parsed))
+                            found.Add(parsed);
                     }
-                }
-                catch
-                {
-                }
-                finally
-                {
-                    if (socket != null)
-                    {
-                        try { socket.Close(); } catch { }
-                    }
+                    if (found.Count > 0)
+                        break;
                 }
             }
+            catch
+            {
+            }
+            finally
+            {
+                if (socket != null)
+                {
+                    try { socket.Close(); } catch { }
+                }
+            }
+            return found;
+        }
 
+        private static List<IPAddress> Gateways()
+        {
+            List<IPAddress> list = new List<IPAddress>();
+            try
+            {
+                foreach (System.Net.NetworkInformation.NetworkInterface nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+                    foreach (System.Net.NetworkInformation.GatewayIPAddressInformation g in nic.GetIPProperties().GatewayAddresses)
+                        if (g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any) && !list.Contains(g.Address))
+                            list.Add(g.Address);
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        /// <summary>NAT-PMP (RFC 6886): ask the gateway on UDP 5351 to forward a UDP port.</summary>
+        private static UpnpPortMapping TryNatPmp(int port)
+        {
+            foreach (IPAddress gateway in Gateways())
+            {
+                try
+                {
+                    int external = NatPmpRequest(gateway, port, port, 7200);
+                    if (external <= 0)
+                        continue;
+                    UpnpPortMapping mapping = new UpnpPortMapping(null, null, external, NatPmpExternalIp(gateway));
+                    mapping._natPmpGateway = gateway;
+                    mapping._natPmpInternalPort = port;
+                    return mapping;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        /// <summary>Returns the mapped external port, or 0 if the gateway said no or didn't answer.</summary>
+        private static int NatPmpRequest(IPAddress gateway, int internalPort, int externalPort, int lifetimeSeconds)
+        {
+            byte[] request = new byte[12];
+            request[1] = 1; // Map UDP.
+            request[4] = (byte)(internalPort >> 8); request[5] = (byte)internalPort;
+            request[6] = (byte)(externalPort >> 8); request[7] = (byte)externalPort;
+            request[8] = (byte)(lifetimeSeconds >> 24); request[9] = (byte)(lifetimeSeconds >> 16); request[10] = (byte)(lifetimeSeconds >> 8); request[11] = (byte)lifetimeSeconds;
+            byte[] reply = NatPmpExchange(gateway, request, 16);
+            if (reply == null || reply[1] != 129 || reply[2] != 0 || reply[3] != 0)
+                return 0;
+            return (reply[10] << 8) | reply[11];
+        }
+
+        private static string NatPmpExternalIp(IPAddress gateway)
+        {
+            byte[] reply = NatPmpExchange(gateway, new byte[2], 12);
+            if (reply == null || reply[1] != 128 || reply[2] != 0 || reply[3] != 0)
+                return String.Empty;
+            return reply[8] + "." + reply[9] + "." + reply[10] + "." + reply[11];
+        }
+
+        private static byte[] NatPmpExchange(IPAddress gateway, byte[] request, int replyLength)
+        {
+            using (Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+            {
+                socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+                EndPoint target = new IPEndPoint(gateway, 5351);
+                int wait = 250;
+                for (int attempt = 0; attempt < 4; attempt++, wait *= 2)
+                {
+                    socket.SendTo(request, target);
+                    socket.ReceiveTimeout = wait;
+                    byte[] buffer = new byte[64];
+                    EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                    try
+                    {
+                        int n = socket.ReceiveFrom(buffer, ref from);
+                        if (n >= replyLength && ((IPEndPoint)from).Address.Equals(gateway))
+                            return buffer;
+                    }
+                    catch (SocketException) { }
+                }
+            }
             return null;
         }
 

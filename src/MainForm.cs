@@ -946,12 +946,12 @@ namespace Maela
                     {
                         publicIp = mapping.ExternalIp;
                         if (mapping.ExternalPort == localPort)
-                            status = "Public UDP endpoint mapped with UPnP";
+                            status = "Port opened on your router automatically";
                         else
-                            status = "Public UDP endpoint mapped with UPnP (router chose port " + mapping.ExternalPort + ")";
+                            status = "Port opened on your router automatically (router chose port " + mapping.ExternalPort + ")";
                     }
                     else
-                        status = "Port not mapped automatically";
+                        status = "Your router didn't open the port. Try Settings > Allow through Firewall, or turn on UPnP/NAT-PMP on your router";
                 }
                 catch
                 {
