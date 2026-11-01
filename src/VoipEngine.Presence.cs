@@ -197,21 +197,12 @@ namespace Maela
                 return;
             PlaybackStream stream;
             lock (_stateLock)
-            {
-                if (!_playbackStreams.TryGetValue(CueStreamId, out stream))
-                {
-                    try
-                    {
-                        stream = new PlaybackStream(CreateFormat(), _outputDeviceId, _farEnd);
-                        _playbackStreams[CueStreamId] = stream;
-                    }
-                    catch
-                    {
-                        return;
-                    }
-                }
-                stream.SetGain(_masterVolumePercent / 100.0f);
-            }
+                _playbackStreams.TryGetValue(CueStreamId, out stream);
+            if (stream == null)
+                stream = OpenPlaybackStream(CueStreamId); // Opened with no lock held (see OpenPlaybackStream).
+            if (stream == null)
+                return;
+            stream.SetGain(_masterVolumePercent / 100.0f);
             stream.PlayClip(pcm);
         }
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.2 - Freeze fix
+
+- **Fixed: mæla could freeze when someone joined and started talking.** The microphone's
+  audio work ran inside a Windows audio callback, and opening speakers for a new person at
+  the same moment could lock both up for good. Microphone processing now runs on its own
+  thread, and speakers are never opened while other work is waiting on them.
+- **Fixed: the old icon showing after updating.** Windows keeps a cached copy of each
+  program's icon; mæla now asks Windows to refresh it once after each update, so the desktop,
+  shortcuts and taskbar show the current icon.
+- **A room's new code updates its saved entry.** If a host's address or port changes, pasting
+  their new code updates the room you already have saved (it is recognised by the host's
+  key) instead of leaving a dead copy behind.
+
 ## 0.7.1 - Clearer voices, tray and instant rejoin
 
 - **Runs in the tray.** Closing the window keeps mæla running in the system tray and keeps

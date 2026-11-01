@@ -118,6 +118,14 @@ namespace Maela
                     RefreshShell(_engine);
                 }
                 VerifyDownloadsInBackground();
+                // Once per version (and after every update): make Windows reload mæla's icon,
+                // so desktops and shortcuts don't keep showing an older one.
+                if (_justUpdated || _preferences.IconRefreshedFor != Updater.CurrentVersionText)
+                {
+                    _preferences.IconRefreshedFor = Updater.CurrentVersionText;
+                    PreferencesStore.Save(_preferences);
+                    ThreadPool.QueueUserWorkItem(delegate { Updater.RefreshShellIcon(); });
+                }
                 ThreadPool.QueueUserWorkItem(delegate
                 {
                     // Render every sound once in the background (~50 ms) so the first chime is instant.
@@ -668,8 +676,12 @@ namespace Maela
                     }
                     else
                     {
+                        // Same room (same host key), possibly with a new code: keep one entry, up to date.
+                        duplicate.Name = dialog.RoomName;
+                        duplicate.Invite = room.Invite;
+                        if (!String.IsNullOrEmpty(room.Password))
+                            duplicate.Password = room.Password;
                         room = duplicate;
-                        room.Name = dialog.RoomName;
                         SavedRoomStore.Save(_savedRooms);
                     }
                     RebuildRoomList(room);
@@ -1191,6 +1203,11 @@ namespace Maela
             });
         }
 
+        /// <summary>
+        /// Finds a saved room by its code, or by the host's key fingerprint: if a host's address
+        /// or port changed, their new code still names the same room, so the saved entry is
+        /// updated instead of leaving a dead copy behind.
+        /// </summary>
         private SavedRoom FindSavedByInvite(string invite)
         {
             int i;
@@ -1199,7 +1216,34 @@ namespace Maela
                 if (String.Equals(_savedRooms[i].Invite, invite, StringComparison.OrdinalIgnoreCase))
                     return _savedRooms[i];
             }
+
+            IPAddress ip;
+            int port;
+            byte[] fingerprint;
+            if (!RoomCode.TryDecode(invite, out ip, out port, out fingerprint))
+                return null;
+            for (i = 0; i < _savedRooms.Count; i++)
+            {
+                SavedRoom room = _savedRooms[i];
+                IPAddress oldIp;
+                int oldPort;
+                byte[] oldFingerprint;
+                if (room.Owned || !RoomCode.TryDecode(room.Invite, out oldIp, out oldPort, out oldFingerprint))
+                    continue;
+                if (SameBytes(fingerprint, oldFingerprint))
+                    return room;
+            }
             return null;
+        }
+
+        private static bool SameBytes(byte[] a, byte[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length)
+                return false;
+            int i;
+            for (i = 0; i < a.Length; i++)
+                if (a[i] != b[i]) return false;
+            return true;
         }
 
         private void ForgetSelectedRoom()

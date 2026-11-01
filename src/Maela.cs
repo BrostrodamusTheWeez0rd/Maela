@@ -347,6 +347,7 @@ namespace Maela
         public bool AutoGain = true;
         public bool CloseToTray = true;
         public bool TrayHintShown;
+        public string IconRefreshedFor = String.Empty;
 
         public AppPreferences Clone()
         {
@@ -366,6 +367,7 @@ namespace Maela
             p.AutoGain = AutoGain;
             p.CloseToTray = CloseToTray;
             p.TrayHintShown = TrayHintShown;
+            p.IconRefreshedFor = IconRefreshedFor;
             return p;
         }
     }
@@ -460,6 +462,10 @@ namespace Maela
                     {
                         p.TrayHintShown = value == "1";
                     }
+                    else if (key == "iconver")
+                    {
+                        p.IconRefreshedFor = value.Trim();
+                    }
                 }
             }
             catch { }
@@ -491,7 +497,8 @@ namespace Maela
                     "sfx=" + (p.SoundEffects ? "1" : "0"),
                     "agc=" + (p.AutoGain ? "1" : "0"),
                     "tray=" + (p.CloseToTray ? "1" : "0"),
-                    "trayhint=" + (p.TrayHintShown ? "1" : "0")
+                    "trayhint=" + (p.TrayHintShown ? "1" : "0"),
+                    "iconver=" + (p.IconRefreshedFor ?? String.Empty)
                 });
             }
             catch { }
@@ -1739,6 +1746,7 @@ namespace Maela
 
             if (_waveIn == IntPtr.Zero)
                 return; // Headless test mode.
+            StartCaptureThread();
             int result = NativeMethods.waveInStart(_waveIn);
             CheckMmResult(result, "Could not start the microphone");
         }
@@ -2443,36 +2451,6 @@ namespace Maela
             }
         }
 
-        private void WaveInCallback(IntPtr hwi, uint message, IntPtr instance, IntPtr headerPtr, IntPtr reserved)
-        {
-            if (message != NativeMethods.WIM_DATA || headerPtr == IntPtr.Zero)
-                return;
-
-            WAVEHDR header = (WAVEHDR)Marshal.PtrToStructure(headerPtr, typeof(WAVEHDR));
-
-            // The capture clock must advance for every frame, muted or not, so the echo
-            // canceller's view of the speaker timeline stays aligned with the microphone.
-            long captureEnd = header.dwBytesRecorded > 0 ? _farEnd.AdvanceCapture((int)header.dwBytesRecorded / 2) : _farEnd.CaptureClock;
-
-            if (_running && MicrophoneOpen && header.dwBytesRecorded > 0)
-            {
-                int audioLength = (int)header.dwBytesRecorded;
-                if (audioLength == AudioBytesPerFrame)
-                {
-                    byte[] pcm = new byte[audioLength];
-                    Marshal.Copy(header.lpData, pcm, 0, audioLength);
-                    ProcessCapturedFrame(pcm, captureEnd);
-                }
-            }
-
-            if (_running && _waveIn != IntPtr.Zero)
-            {
-                header.dwBytesRecorded = 0;
-                Marshal.StructureToPtr(header, headerPtr, false);
-                NativeMethods.waveInAddBuffer(_waveIn, headerPtr, (uint)Marshal.SizeOf(typeof(WAVEHDR)));
-            }
-        }
-
         /// <summary>
         /// Echo cancellation, mic gain, silence gate and Opus encoding for one 10 ms frame,
         /// then sends whatever the encoder decided should go out.
@@ -2583,20 +2561,11 @@ namespace Maela
                     decoder = new VoiceDecoder();
                     _voiceDecoders[senderId] = decoder;
                 }
-                if (!_playbackStreams.TryGetValue(senderId, out stream) && !HeadlessForTests)
-                {
-                    try
-                    {
-                        stream = new PlaybackStream(CreateFormat(), _outputDeviceId, _farEnd);
-                        _playbackStreams[senderId] = stream;
-                        stream.SetGain(GetEffectivePlaybackGainLocked(senderId));
-                    }
-                    catch
-                    {
-                        stream = null;
-                    }
-                }
+                _playbackStreams.TryGetValue(senderId, out stream);
             }
+
+            if (stream == null && !HeadlessForTests)
+                stream = OpenPlaybackStream(senderId);
 
             List<byte[]> frames = _decodedScratch;
             frames.Clear();
@@ -2611,6 +2580,34 @@ namespace Maela
                 if (testSink != null)
                     testSink(senderId, frames[i]);
             }
+        }
+
+        /// <summary>
+        /// Opens a speaker stream for one sender. The device is opened with no lock held:
+        /// waveOutOpen can wait on WinMM's internal lock, and holding _stateLock while it does
+        /// is how audio deadlocks happen.
+        /// </summary>
+        private PlaybackStream OpenPlaybackStream(uint senderId)
+        {
+            PlaybackStream created;
+            try { created = new PlaybackStream(CreateFormat(), _outputDeviceId, _farEnd); }
+            catch { return null; }
+
+            PlaybackStream existing = null;
+            bool added = false;
+            lock (_stateLock)
+            {
+                if (_running && !_playbackStreams.TryGetValue(senderId, out existing))
+                {
+                    _playbackStreams[senderId] = created;
+                    created.SetGain(senderId == CueStreamId ? _masterVolumePercent / 100.0f : GetEffectivePlaybackGainLocked(senderId));
+                    added = true;
+                }
+            }
+            if (added)
+                return created;
+            created.Dispose(); // Shutting down, or another thread opened one first.
+            return existing;
         }
 
         private float GetEffectivePlaybackGainLocked(uint senderId)
@@ -2919,8 +2916,8 @@ namespace Maela
                 try { maintenanceThread.Join(800); } catch { }
             }
 
-            IntPtr waveIn = _waveIn;
-            _waveIn = IntPtr.Zero;
+            // Stop the capture thread first, so no buffer is handed back or read while closing.
+            IntPtr waveIn = StopCapture();
             if (waveIn != IntPtr.Zero)
             {
                 try { NativeMethods.waveInStop(waveIn); } catch { }

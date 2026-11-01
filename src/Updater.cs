@@ -207,6 +207,34 @@ namespace Maela
             });
         }
 
+        /// <summary>
+        /// Windows caches each program's icon by file path, so after an in-place update Explorer,
+        /// desktop shortcuts and the taskbar can keep showing the old icon. This tells the shell
+        /// the file changed so it reloads the icon.
+        /// </summary>
+        public static void RefreshShellIcon()
+        {
+            try
+            {
+                string target = Application.ExecutablePath;
+                IntPtr path = System.Runtime.InteropServices.Marshal.StringToHGlobalUni(target);
+                try
+                {
+                    SHChangeNotify(0x00002000 /* SHCNE_UPDATEITEM */, 0x0005 /* SHCNF_PATHW */, path, IntPtr.Zero);
+                }
+                finally
+                {
+                    System.Runtime.InteropServices.Marshal.FreeHGlobal(path);
+                }
+                // Also covers shortcuts to mæla that were made before the icon changed.
+                SHChangeNotify(0x08000000 /* SHCNE_ASSOCCHANGED */, 0x1000 /* SHCNF_FLUSHNOWAIT */, IntPtr.Zero, IntPtr.Zero);
+            }
+            catch { }
+        }
+
+        [System.Runtime.InteropServices.DllImport("shell32.dll")]
+        private static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
+
         public static bool TryParseTag(string tag, out Version version)
         {
             version = null;
