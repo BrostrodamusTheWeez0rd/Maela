@@ -71,6 +71,8 @@ authentication, arrives twice, or is older than the 1,024-packet replay window.
 ### Leaving and coming back
 
 - Quitting sends LEAVE three times (UDP can drop one); mæla also sends it if it crashes.
+- A host that quits sends LEAVE to every member; members disconnect at once and keep retrying
+  until the room is back.
 - If a client vanishes without LEAVE (Task Manager, power cut, lost Wi-Fi), the host drops it
   after 10 seconds without packets.
 - If the same person comes back before then (a JOIN from the same IP address with the same

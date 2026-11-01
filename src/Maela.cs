@@ -41,13 +41,26 @@ namespace Maela
             // One copy at a time: a second launch (say, from the Start menu while mæla sits in
             // the tray) just brings the running one to the front. Right after an update the old
             // copy may still be closing, so wait a moment for it.
-            using (SingleInstance instance = SingleInstance.Acquire(justUpdated ? 15000 : 0))
+            SingleInstance instance = SingleInstance.Acquire(justUpdated ? 15000 : 0);
+            if (instance == null)
             {
-                if (instance == null)
+                // Another copy is running. If it answers, just bring it forward. If it is frozen,
+                // close it so this start-up is clean: no stuck window, no stale connection.
+                if (SingleInstance.RunningCopyResponds(4000))
                 {
                     SingleInstance.ShowRunningCopy();
                     return;
                 }
+                SingleInstance.EndFrozenCopies();
+                instance = SingleInstance.Acquire(5000);
+                if (instance == null)
+                {
+                    MessageBox.Show("Another copy of m\u00E6la is still running and not responding. Close it in Task Manager, then try again.", "m\u00E6la", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+            using (instance)
+            {
 
                 // If mæla crashes, still tell the room we left so rejoining is instant.
                 Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -108,6 +121,74 @@ namespace Maela
             }
             mutex.Close();
             return null;
+        }
+
+        private const string PingName = "Local\\Maela-7d1f6a52-ping";
+        private const string PongName = "Local\\Maela-7d1f6a52-pong";
+        private static EventWaitHandle _ping;
+        private static EventWaitHandle _pong;
+
+        /// <summary>
+        /// Running copy: called from the UI timer. Answering proves the window is alive; a frozen
+        /// copy can't answer.
+        /// </summary>
+        public static void AnswerPing()
+        {
+            try
+            {
+                if (_ping == null)
+                {
+                    _ping = new EventWaitHandle(false, EventResetMode.AutoReset, PingName);
+                    _pong = new EventWaitHandle(false, EventResetMode.AutoReset, PongName);
+                }
+                if (_ping.WaitOne(0, false))
+                    _pong.Set();
+            }
+            catch { }
+        }
+
+        /// <summary>New copy: asks the running one to answer; false if it doesn't within the time.</summary>
+        public static bool RunningCopyResponds(int timeoutMs)
+        {
+            try
+            {
+                using (EventWaitHandle ping = new EventWaitHandle(false, EventResetMode.AutoReset, PingName))
+                using (EventWaitHandle pong = new EventWaitHandle(false, EventResetMode.AutoReset, PongName))
+                {
+                    pong.Reset();
+                    ping.Set();
+                    return pong.WaitOne(timeoutMs, false);
+                }
+            }
+            catch
+            {
+                return true; // Can't tell: assume it is fine rather than closing it.
+            }
+        }
+
+        /// <summary>Closes other copies of this same mæla.exe (used only when they are frozen).</summary>
+        public static void EndFrozenCopies()
+        {
+            try
+            {
+                Process current = Process.GetCurrentProcess();
+                string path = Application.ExecutablePath;
+                foreach (Process other in Process.GetProcessesByName(current.ProcessName))
+                {
+                    try
+                    {
+                        if (other.Id == current.Id)
+                            continue;
+                        if (!String.Equals(other.MainModule.FileName, path, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        other.Kill();
+                        other.WaitForExit(3000);
+                    }
+                    catch { }
+                    finally { other.Dispose(); }
+                }
+            }
+            catch { }
         }
 
         public static void ShowRunningCopy()
@@ -1991,6 +2072,14 @@ namespace Maela
             _hostEndpoint = new IPEndPoint(sender.Address, sender.Port);
             _lastHostSeenUtc = DateTime.UtcNow;
 
+            if (packet.Type == PacketLeave)
+            {
+                // The host closed the room. Stop at once; rejoin automatically if it comes back.
+                if (_connected)
+                    LoseConnection("The host closed the room - rejoining when it's back...");
+                return;
+            }
+
             if (packet.Type == PacketWelcome)
             {
                 _localId = packet.SenderId;
@@ -2126,26 +2215,30 @@ namespace Maela
                 SendPeerListNow(false);
         }
 
+        /// <summary>Client: drop the current connection and keep trying to rejoin with a fresh handshake.</summary>
+        private void LoseConnection(string message)
+        {
+            _connected = false;
+            _localId = 0;
+            _localChannelId = 0;
+            lock (_stateLock)
+            {
+                _memberNames.Clear();
+                _memberChannels.Clear();
+                _channels.Clear();
+            }
+            DisposePlaybackStreams();
+            DropClientSession(); // Reconnect with a fresh handshake.
+            _joinStartedUtc = DateTime.UtcNow;
+            SetLastMessage(message);
+        }
+
         private void ClientMaintenance()
         {
             DateTime now = DateTime.UtcNow;
 
             if (_connected && _lastHostSeenUtc != DateTime.MinValue && (now - _lastHostSeenUtc).TotalSeconds > 8.0)
-            {
-                _connected = false;
-                _localId = 0;
-                _localChannelId = 0;
-                lock (_stateLock)
-                {
-                    _memberNames.Clear();
-                    _memberChannels.Clear();
-                    _channels.Clear();
-                }
-                DisposePlaybackStreams();
-                DropClientSession(); // Reconnect with a fresh handshake.
-                _joinStartedUtc = now;
-                SetLastMessage("Connection lost - reconnecting...");
-            }
+                LoseConnection("Connection lost - reconnecting...");
 
             if (!_connected)
             {
@@ -2882,13 +2975,32 @@ namespace Maela
 
         public void Dispose()
         {
+            // Always say goodbye before closing, so nobody is left with a stale connection.
+            // UDP can drop a packet, so it goes out three times; repeats are ignored.
             if (!_isHost && _running && _connected && _hostEndpoint != null && _localId != 0)
             {
-                // UDP can drop a packet, so say goodbye three times; the host ignores repeats.
                 for (int attempt = 0; attempt < 3; attempt++)
                 {
                     try { SendPacket(_hostEndpoint, PacketLeave, _localId, 0, new byte[0]); }
                     catch { }
+                }
+            }
+            else if (_isHost && _running)
+            {
+                // Host closing: tell every member straight away instead of letting them time out.
+                List<IPEndPoint> members = new List<IPEndPoint>();
+                lock (_stateLock)
+                {
+                    foreach (KeyValuePair<string, Participant> pair in _hostParticipants)
+                        members.Add(pair.Value.Endpoint);
+                }
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    foreach (IPEndPoint member in members)
+                    {
+                        try { SendPacket(member, PacketLeave, _localId, 0, new byte[0]); }
+                        catch { }
+                    }
                 }
             }
 

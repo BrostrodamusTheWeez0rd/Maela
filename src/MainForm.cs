@@ -76,6 +76,7 @@ namespace Maela
 
             _uiTimer.Interval = 120;
             _uiTimer.Tick += UiTimerTick;
+            _uiTimer.Tick += delegate { SingleInstance.AnswerPing(); };
             _uiTimer.Start();
             FormClosing += MainFormClosing;
             Program.LeaveRoomOnCrash = delegate

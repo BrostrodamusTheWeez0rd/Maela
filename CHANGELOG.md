@@ -6,6 +6,11 @@
   audio work ran inside a Windows audio callback, and opening speakers for a new person at
   the same moment could lock both up for good. Microphone processing now runs on its own
   thread, and speakers are never opened while other work is waiting on them.
+- **Quitting always cuts the connection cleanly.** Members say goodbye to the host, and a
+  host that quits now tells everyone at once (they see "The host closed the room" and
+  rejoin by themselves when it is back) instead of hanging for 8 seconds.
+- **A clean start every time.** If an earlier copy of mæla is frozen, opening mæla again
+  closes the frozen copy and starts fresh, instead of just poking the stuck window.
 - **Fixed: the old icon showing after updating.** Windows keeps a cached copy of each
   program's icon; mæla now asks Windows to refresh it once after each update, so the desktop,
   shortcuts and taskbar show the current icon.

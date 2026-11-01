@@ -41,5 +41,7 @@ Before tagging a public build:
 - [ ] Launching mæla a second time brings the running copy forward instead of opening another.
 - [ ] Ending mæla from Task Manager and reopening it rejoins at once, in the same channel,
       without a duplicate of you in the member list.
+- [ ] Quitting the host (tray > Stop room and quit) disconnects members within a second.
+- [ ] With a frozen copy running, opening mæla again closes it and starts normally.
 - [ ] Settings > Licenses shows the MIT license and third-party notices.
 - [ ] `package_release.cmd` produces the expected release ZIP.

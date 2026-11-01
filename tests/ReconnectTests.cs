@@ -127,6 +127,31 @@ namespace Maela.Tests
             }
         }
 
+        static void HostQuits()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Host quits normally, then opens the room again");
+            VoipEngine host = Host(0);
+            int port = host.BoundPort;
+            VoipEngine alice = Client(port, "Alice", 0);
+            VoipEngine host2 = null;
+            try
+            {
+                Check(WaitFor(delegate { return alice.IsInVoice; }, 8000), "Alice joins");
+                DateTime t0 = DateTime.UtcNow;
+                host.Dispose();
+                Check(WaitFor(delegate { return !alice.IsConnected; }, 1000),
+                    "Alice is disconnected at once (" + (DateTime.UtcNow - t0).TotalSeconds.ToString("F1") + " s)");
+                host2 = Host(port);
+                Check(WaitFor(delegate { return alice.IsInVoice && Count(host2, "Alice") == 1; }, 8000), "Alice rejoins when the room is back");
+            }
+            finally
+            {
+                alice.Dispose();
+                if (host2 != null) host2.Dispose();
+            }
+        }
+
         static void HostCrash()
         {
             Console.WriteLine();
@@ -156,6 +181,7 @@ namespace Maela.Tests
             ClientCrash("Client closes without warning, rejoins from a new port", false);
             ClientCrash("Client closes without warning, rejoins from the same port (same NAT mapping)", true);
             CleanClose();
+            HostQuits();
             HostCrash();
             Console.WriteLine();
             Console.WriteLine(_failures == 0 ? "All reconnect checks passed." : _failures + " reconnect check(s) FAILED.");
