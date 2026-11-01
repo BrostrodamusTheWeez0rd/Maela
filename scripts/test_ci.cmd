@@ -99,10 +99,38 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Stream pipeline ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\StreamPipelineTests.exe" /unsafe /nowarn:0649 /main:Maela.Tests.StreamPipelineTests %REFS% %ENGINE% "tests\StreamPipelineTests.cs"
+if errorlevel 1 exit /b 1
+"obj\StreamPipelineTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Send scheduler ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\SendSchedulerTests.exe" "tests\SendSchedulerTests.cs" "src\SendScheduler.cs"
+if errorlevel 1 exit /b 1
+"obj\SendSchedulerTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Screen-share transport ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\StreamTests.exe" /main:Maela.Tests.StreamTests %REFS% %ENGINE% "tests\StreamTests.cs"
 if errorlevel 1 exit /b 1
 "obj\StreamTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Router port mapping ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\PortMappingTests.exe" /main:Maela.Tests.PortMappingTests %REFS% %ENGINE% "tests\PortMappingTests.cs"
+if errorlevel 1 exit /b 1
+"obj\PortMappingTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Stream sound ===
+"%CSC%" /nologo /target:exe /out:"obj\StreamAudioTests.exe" /main:Maela.Tests.StreamAudioTests %REFS% %ENGINE% "tests\StreamAudioTests.cs"
+if errorlevel 1 exit /b 1
+"obj\StreamAudioTests.exe"
 if errorlevel 1 exit /b 1
 
 echo.

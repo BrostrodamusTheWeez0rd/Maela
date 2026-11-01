@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.10.0 - Graphics card, sound and steadier streams
+
+- **Share your PC's sound.** Share sound, on by default, sends what your programs play along with
+  a screen, or only that program's sound with a window. The voice chat is always left out. In the
+  viewer, M mutes and the arrow keys change the volume. Needs Windows 10 version 2004 or later;
+  on older Windows the picture carries on without sound.
+- **Graphics-card watching.** The viewer now draws with your graphics card, and at 1080p and
+  above decodes there too, inside the same sandbox. Settings > App lets you choose Automatic,
+  Always or Never. If decoding fails, or a stream doesn't pass mæla's safety check, it carries on
+  with the processor. Decoding on the card means video reaches your graphics driver, which the
+  sandbox protects less (see SECURITY.md).
+- **Graphics-card encoding.** Screen sharing now uses your NVIDIA, AMD or Intel graphics card
+  when it can, so high resolutions and frame rates leave your processor free. mæla goes back to
+  the processor by itself if the card can't do it.
+- **Fewer freezes when packets are lost.** Viewers can rebuild or re-request lost pieces instead
+  of waiting for a whole new picture, and keyframes are rarer, so there are fewer spikes.
+- **Smoother to watch.** The viewer now shows frames on an even beat, with a small buffer that
+  grows only as much as your connection needs.
+- **Steadier frame rate when sharing.** Capture and encoding run separately, so a slow frame
+  doesn't hold up the next.
+- **Better quality decisions.** Quality drops only on real signs of congestion (loss or rising
+  ping), not because the screen was still, and changes without a visible hitch.
+- **Stats.** The Stats button on the live bar, and F3 in the viewer, show where the time goes.
+- **Steadier voice during screen sharing.** Video now leaves evenly instead of a whole frame at
+  once, on its own thread, so voice no longer gets stuck behind it. When a viewer's connection
+  can't keep up, mæla holds video back instead of flooding the router.
+- **Rooms open a port on more kinds of network**: PCs with a VPN or several network adapters,
+  routers with an unused PPP service, routers that refuse permanent mappings, and routers that
+  forget mappings when they restart. If another router or your internet provider sits in front
+  of yours, mæla now says so, and the room code uses your real public address.
+
 ## 0.9.2 - Router fix
 
 - **Fixed: rooms not opening a port on the router automatically.** mæla now also asks the

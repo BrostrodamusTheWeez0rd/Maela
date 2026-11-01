@@ -14,6 +14,7 @@ namespace Maela
         private readonly Dictionary<uint, StreamViewerHost> _viewers = new Dictionary<uint, StreamViewerHost>();
         private VoipEngine _streamEngine;
         private bool _toolInstallRunning;
+        private DateTime _lastViewerStatsUtc = DateTime.MinValue;
 
         /// <summary>Hooks the engine's video into the viewer helpers (once per room).</summary>
         private void AttachStreams(VoipEngine engine)
@@ -61,13 +62,14 @@ namespace Maela
             }
             if (!ConfirmDirectNotice())
                 return;
-            using (ShareScreenDialog dialog = new ShareScreenDialog(_preferences.ShareHeight, _preferences.ShareFps))
+            using (ShareScreenDialog dialog = new ShareScreenDialog(_preferences.ShareHeight, _preferences.ShareFps, _preferences.ShareAudio))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Settings.Source == null)
                     return;
                 _shareSettings = dialog.Settings;
                 _preferences.ShareHeight = dialog.Settings.MaxHeight;
                 _preferences.ShareFps = dialog.Settings.Fps;
+                _preferences.ShareAudio = dialog.Settings.ShareAudio;
                 PreferencesStore.Save(_preferences);
             }
             WithVideoTools(delegate { StartSharing(); });
@@ -134,12 +136,26 @@ namespace Maela
             {
                 int viewers = engine.StreamViewerCount;
                 Size s = _shareSender.OutputSize;
-                _liveBar.Text = "You're live · " + (s.Height > 0 ? s.Height + "p" : _shareSettings.MaxHeight + "p") + _shareSettings.Fps
-                    + " · " + (viewers == 0 ? "nobody watching yet" : viewers + " watching")
-                    + (viewers > 0 && _shareSender.ActualFps > 0 ? " · " + _shareSender.ActualFps + " fps, " + (_shareSender.BitrateKbps / 1000.0).ToString("0.#") + " Mbps" : String.Empty);
+                _shareSender.MeasureTimings = _liveBar.StatsVisible;
+                if (_liveBar.StatsVisible)
+                    _liveBar.Text = ShareStatsLine(engine);
+                else
+                    _liveBar.Text = "You're live · " + (s.Height > 0 ? s.Height + "p" : _shareSettings.MaxHeight + "p") + _shareSettings.Fps
+                        + " · " + (viewers == 0 ? "nobody watching yet" : viewers + " watching")
+                        + (viewers > 0 && _shareSender.ActualFps > 0 ? " · " + _shareSender.ActualFps + " fps, " + (_shareSender.BitrateKbps / 1000.0).ToString("0.#") + " Mbps" : String.Empty)
+                        + (_shareSender.AudioProblem != null ? " · no sound" : String.Empty);
                 _liveBar.Invalidate();
             }
             _voiceCard.ScreenButton.Toggled = live;
+        }
+
+        private string ShareStatsLine(VoipEngine engine)
+        {
+            ShareNetworkStats net = engine.GetShareNetworkStats();
+            return _shareSender.EncoderName + " · " + _shareSender.ActualFps + " fps · " + (_shareSender.BitrateKbps / 1000.0).ToString("0.#") + " Mbps · capture " + (_shareSender.CaptureUs / 1000.0).ToString("0.0")
+                + " ms · encode " + (_shareSender.EncodeUs / 1000.0).ToString("0.0") + " ms · skipped " + _shareSender.SkippedFrames + " · queue " + net.QueuedBytes / 1024 + " KB · dropped " + net.DroppedFrames
+                + " · loss " + (net.LossPermille / 10.0).ToString("0.0") + "% · resent " + net.ResentFragments + " · ping " + net.RttMs + " ms"
+                + " · sound: " + (_shareSettings.ShareAudio ? (_shareSender.AudioProblem ?? "on") : "off");
         }
 
         // ----- Watching -----
@@ -168,7 +184,10 @@ namespace Maela
             StreamViewerHost viewer;
             try
             {
-                viewer = new StreamViewerHost(sharerId, name + "'s screen · mæla");
+                LiveStreamInfo stream = engine.GetLiveStream(sharerId);
+                bool gpuDecode = _preferences.StreamDecode == StreamDecodeMode.Always ||
+                    (_preferences.StreamDecode == StreamDecodeMode.Automatic && stream != null && stream.Height >= 1080);
+                viewer = new StreamViewerHost(sharerId, name + "'s screen · mæla", gpuDecode);
             }
             catch (Exception ex)
             {
@@ -176,6 +195,8 @@ namespace Maela
                 return;
             }
             viewer.NeedKeyframe += delegate { VoipEngine e = _engine; if (e != null) e.RequestStreamKeyframe(sharerId); };
+            engine.SetStreamVolume(sharerId, 100);
+            viewer.VolumeChanged += delegate(int volume) { VoipEngine e = _engine; if (e != null) e.SetStreamVolume(sharerId, volume); };
             viewer.Closed += delegate
             {
                 lock (_viewers)
@@ -205,6 +226,18 @@ namespace Maela
             {
                 foreach (uint sharer in _viewers.Keys)
                     if (engine == null || engine.GetLiveStream(sharer) == null) ended.Add(sharer);
+                if (engine != null && (DateTime.UtcNow - _lastViewerStatsUtc).TotalSeconds >= 1)
+                {
+                    _lastViewerStatsUtc = DateTime.UtcNow;
+                    foreach (KeyValuePair<uint, StreamViewerHost> pair in _viewers)
+                    {
+                        if (!pair.Value.WantsStats)
+                            continue;
+                        WatchNetworkStats net = engine.GetWatchNetworkStats(pair.Key);
+                        if (net != null)
+                            pair.Value.PushStats((net.Kbps / 1000.0).ToString("0.0") + " Mbps · loss " + (net.LossPermille / 10.0).ToString("0.0") + "% · repaired " + net.Repaired + " · unrecovered " + net.Lost + " · keyframes asked for " + net.KeyframeRequests + " · sound frames " + net.AudioFrames + " (" + net.AudioConcealed + " concealed)");
+                    }
+                }
             }
             foreach (uint sharer in ended)
             {
@@ -293,9 +326,10 @@ namespace Maela
         private readonly ComboBox _quality = new ComboBox();
         private readonly ComboBox _rate = new ComboBox();
         private readonly ToggleSwitch _cursor;
+        private readonly ToggleSwitch _audio;
         public readonly ShareSettings Settings = new ShareSettings();
 
-        public ShareScreenDialog(int height, int fps) : base("Share screen", 560, 560)
+        public ShareScreenDialog(int height, int fps, bool audio) : base("Share screen", 560, 640)
         {
             AddHeading("Share your screen", "People in your voice channel can choose to watch. Sharing one window keeps everything else private.");
             AddFieldLabel("What to share", Margin_X, Cursor_Y);
@@ -330,6 +364,7 @@ namespace Maela
             Style(_rate); _rate.SetBounds(Margin_X + half + 16, Cursor_Y, half, 28); Controls.Add(_rate);
             Cursor_Y += 44;
             _cursor = AddToggle("Show my mouse pointer", null, true);
+            _audio = AddToggle("Share sound", "Never includes the voice chat. A window shares only its own program's sound.", audio);
             AddText("Higher quality needs more upload speed: about 10 Mbps per viewer at 1080p60. mæla lowers quality automatically if a viewer can't keep up.",
                 Theme.Current.Muted, ClientSize.Width - Margin_X * 2).Font = Ui.Small;
 
@@ -345,6 +380,7 @@ namespace Maela
                 Settings.MaxHeight = new int[] { 720, 1080, 1440, 2160 }[_quality.SelectedIndex];
                 Settings.Fps = new int[] { 30, 60, 120 }[_rate.SelectedIndex];
                 Settings.ShowCursor = _cursor.Checked;
+                Settings.ShareAudio = _audio.Checked;
             };
         }
 
@@ -429,6 +465,8 @@ namespace Maela
     {
         public readonly FlatButton StopButton = new FlatButton();
         public readonly FlatButton PreviewButton = new FlatButton();
+        public readonly FlatButton StatsButton = new FlatButton();
+        public bool StatsVisible;
 
         public LiveBar()
         {
@@ -442,6 +480,11 @@ namespace Maela
             PreviewButton.Text = "Preview";
             PreviewButton.Size = new Size(90, 28);
             Controls.Add(PreviewButton);
+            StatsButton.Look = ButtonLook.Secondary;
+            StatsButton.Text = "Stats";
+            StatsButton.Size = new Size(70, 28);
+            StatsButton.Click += delegate { StatsVisible = !StatsVisible; };
+            Controls.Add(StatsButton);
         }
 
         protected override void OnLayout(LayoutEventArgs e)
@@ -449,6 +492,7 @@ namespace Maela
             base.OnLayout(e);
             StopButton.Location = new Point(Width - StopButton.Width - 12, 6);
             PreviewButton.Location = new Point(StopButton.Left - PreviewButton.Width - 8, 6);
+            StatsButton.Location = new Point(PreviewButton.Left - StatsButton.Width - 8, 6);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -457,9 +501,10 @@ namespace Maela
             e.Graphics.Clear(t.Danger);
             StopButton.Underlay = t.Danger;
             PreviewButton.Underlay = t.Danger;
+            StatsButton.Underlay = t.Danger;
             using (SolidBrush dot = new SolidBrush(Color.White))
                 e.Graphics.FillEllipse(dot, 16, 15, 10, 10);
-            Ui.DrawText(e.Graphics, Text, Ui.BodyBold, new Rectangle(34, 0, Width - 280, Height), Color.White, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+            Ui.DrawText(e.Graphics, Text, StatsVisible ? Ui.Small : Ui.BodyBold, new Rectangle(34, 0, Width - 360, Height), Color.White, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.WordBreak);
         }
     }
 }

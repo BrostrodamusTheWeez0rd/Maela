@@ -382,6 +382,7 @@ namespace Maela
         private readonly ToggleSwitch _autoUpdate;
         private readonly ToggleSwitch _closeToTray;
         private readonly ToggleSwitch _directStreams;
+        private readonly ComboBox _streamDecode = new ComboBox();
         private readonly Label _downloadStatus = new Label();
         private readonly FlatButton _repair = new FlatButton();
         private readonly System.Collections.Generic.List<ThemeCard> _themeCards = new System.Collections.Generic.List<ThemeCard>();
@@ -473,6 +474,20 @@ namespace Maela
             AddSection("App");
             _closeToTray = AddToggle("Keep running in the tray when closed", "Closing the window keeps you in your room. Right-click the tray icon to quit.", _preferences.CloseToTray);
             _directStreams = AddToggle("Connect directly for screen sharing", "On (default): best quality; the person sharing or watching can see your IP. Off: always go through the host.", _preferences.AllowDirectStreams);
+            AddFieldLabel("Use the graphics card to decode streams you watch", Margin_X, Cursor_Y);
+            Cursor_Y += 22;
+            foreach (string mode in new string[] { "Automatic: at 1080p and above", "Always: fastest, at every size", "Never: processor only, best isolated" })
+                _streamDecode.Items.Add(mode);
+            _streamDecode.SelectedIndex = (int)_preferences.StreamDecode;
+            _streamDecode.DropDownStyle = ComboBoxStyle.DropDownList;
+            _streamDecode.FlatStyle = FlatStyle.Flat;
+            _streamDecode.BackColor = Theme.Current.Surface;
+            _streamDecode.ForeColor = Theme.Current.Text;
+            _streamDecode.SetBounds(Margin_X, Cursor_Y, ClientSize.Width - Margin_X * 2, 28);
+            Controls.Add(_streamDecode);
+            Cursor_Y += 36;
+            AddText("Faster, but video then reaches your graphics driver, which the viewer's sandbox protects less. Anything that fails goes back to the processor.",
+                Theme.Current.Muted, ClientSize.Width - Margin_X * 2).Font = Ui.Small;
 
             AddSection("Updates");
             _autoUpdate = AddToggle("Check for updates automatically", "mæla " + Updater.CurrentVersionText + " · updates come from GitHub releases", _preferences.AutoUpdate);
@@ -590,6 +605,7 @@ namespace Maela
             if (_preferences.AllowDirectStreams != _directStreams.Checked)
                 _preferences.StreamNoticeShown = true;
             _preferences.AllowDirectStreams = _directStreams.Checked;
+            _preferences.StreamDecode = (StreamDecodeMode)_streamDecode.SelectedIndex;
             if (_autoUpdate.Checked && !_preferences.AutoUpdate)
                 _preferences.SkippedVersion = String.Empty;
             _preferences.AutoUpdate = _autoUpdate.Checked;

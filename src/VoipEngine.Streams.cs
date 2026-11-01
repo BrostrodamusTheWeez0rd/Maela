@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 namespace Maela
 {
@@ -18,6 +20,20 @@ namespace Maela
     }
 
     internal enum StreamWatchState { None, Connecting, Direct, Relayed }
+
+    /// <summary>How sending your stream is going, for the stats readout.</summary>
+    internal sealed class ShareNetworkStats
+    {
+        public long QueuedBytes, DroppedFrames, ResentFragments;
+        public int LossPermille, RttMs, ParityGroup;
+    }
+
+    /// <summary>How a stream you're watching is arriving, for the stats readout.</summary>
+    internal sealed class WatchNetworkStats
+    {
+        public int Kbps, LossPermille;
+        public long Repaired, Lost, KeyframeRequests, AudioFrames, AudioConcealed;
+    }
 
     /// <summary>
     /// Screen-share transport.
@@ -65,6 +81,24 @@ namespace Maela
         private const byte MediaVideo = 1;
         private const byte MediaKeyframeRequest = 2;
         private const byte MediaReport = 3;
+        // Older copies ignore these three, and still get and send plain video.
+        private const byte MediaParity = 4;
+        private const byte MediaResend = 5;
+        private const byte MediaProbe = 6;
+        private const byte MediaProbeReply = 7;
+        private const byte MediaAudio = 8;               // Sound of the shared screen: sequence, Opus.
+
+        private const int RecoveryWaitMs = 120;          // How long a later frame waits for a damaged one to be repaired.
+        private const int ResendAfterMs = 15;            // Give parity and stragglers this long first.
+        private const int ResendRetryMs = 40;
+        private const int ResendTries = 2;
+        private const int ResendMaxPerRequest = 64;
+        private const int ResendMaxPerSecond = 2000;     // Per viewer; a request can't make us send without limit.
+        private const int KeepSentFrames = 128;
+        private const long KeepSentBytes = 16 * 1024 * 1024;
+        private const int KeyframeRequestGapMs = 500;    // Bursts of requests shouldn't become bursts of keyframes.
+        private const int ParityHoldSeconds = 10;
+        private const int CongestionRiseMs = 30;
 
         private sealed class StreamLink
         {
@@ -93,11 +127,26 @@ namespace Maela
             // Sending side: what the viewer said last.
             public int ViewerKbps = -1;
             public int ViewerLossPermille;
+            public double RttMs = -1, BaseRttMs = -1;
+            public int ResendBudget = ResendMaxPerSecond;
+            public DateTime ResendBudgetUtc = DateTime.UtcNow;
+            // Receiving side: for the readout, and for repairing frames.
+            public DateTime GapSinceUtc = DateTime.MinValue;
+            public int LastKbps, LastLossPermille;
+            public long Repaired, Lost, KeyframeRequests;
+            // Stream sound (only the receive thread touches these, until Dispose).
+            public StreamAudioDecoder AudioDecoder;
+            public PlaybackStream AudioPlayback;
+            public bool AudioPlaybackFailed;
+            public long AudioFrames;
 
             public void Dispose()
             {
                 if (Send != null) Send.Dispose();
                 if (Receive != null) Receive.Dispose();
+                PlaybackStream playback = AudioPlayback;
+                AudioPlayback = null;
+                if (playback != null) playback.Dispose();
             }
         }
 
@@ -107,6 +156,11 @@ namespace Maela
             public int Received;
             public bool Keyframe;
             public DateTime FirstUtc = DateTime.UtcNow;
+            public DateTime LastResendUtc = DateTime.MinValue;
+            public int ResendTries;
+            public int ResendAsked;
+            public List<byte[]> Parity;
+            public bool Complete { get { return Received == Fragments.Length; } }
         }
 
         private sealed class HostWatch
@@ -130,6 +184,31 @@ namespace Maela
         private readonly Dictionary<uint, long> _relayBudget = new Dictionary<uint, long>();
         private readonly Dictionary<uint, DateTime> _lastWatchRequestUtc = new Dictionary<uint, DateTime>();
         private DateTime _relayBudgetResetUtc = DateTime.UtcNow;
+        // Pacing.
+        private SendScheduler _scheduler;
+        private DateTime _lastPacerKeyframeUtc = DateTime.MinValue;
+        private DateTime _lastVideoCapUtc = DateTime.MinValue;
+        private long _videoCapBytes;
+        private BitrateController _bitrate;
+        // What was sent lately, so lost fragments can go again.
+        private readonly Dictionary<uint, byte[][]> _sentFrames = new Dictionary<uint, byte[][]>();
+        private readonly Queue<uint> _sentOrder = new Queue<uint>();
+        private long _sentFrameBytes;
+        private int _parityGroup;
+        private DateTime _parityUntilUtc = DateTime.MinValue;
+        private DateTime _lastViewerKeyframeUtc = DateTime.MinValue;
+        private long _resentFragments;
+
+        private readonly Dictionary<uint, int> _streamVolume = new Dictionary<uint, int>();
+        private readonly List<byte[]> _audioFrames = new List<byte[]>();
+
+        /// <summary>Tests only: each decoded frame of stream sound that would be played.</summary>
+        internal Action<uint, byte[]> StreamAudioForTests { get; set; }
+        /// <summary>Tests only: really play stream sound though this engine is otherwise headless.</summary>
+        internal bool PlayStreamAudioForTests { get; set; }
+
+        /// <summary>Tests only: this share of incoming direct video is lost on the way in.</summary>
+        internal double IncomingMediaLossForTests { get; set; }
 
         /// <summary>Viewer callback: (sharer id, one complete encoded frame, is keyframe). Receive thread.</summary>
         public Action<uint, byte[], bool> VideoFrameReceived { get; set; }
@@ -182,6 +261,18 @@ namespace Maela
                 return;
             _localStreamId = 0;
             AnnounceStream();
+            SendScheduler scheduler = _scheduler;
+            if (scheduler != null)
+                scheduler.ClearVideo();
+            _videoCapBytes = 0;
+            lock (_stateLock)
+            {
+                _bitrate = null;
+                _sentFrames.Clear();
+                _sentOrder.Clear();
+                _sentFrameBytes = 0;
+                _parityGroup = 0;
+            }
             List<StreamLink> ended = new List<StreamLink>();
             lock (_stateLock)
             {
@@ -247,24 +338,18 @@ namespace Maela
         }
 
         /// <summary>
-        /// A bitrate every viewer can take, from their reports: the slowest viewer's measured rate,
-        /// trimmed when they lose packets, else allowed to grow. 0 = no viewers yet.
+        /// A bitrate every viewer can take. Falls on signs of congestion only, so a still screen
+        /// that happens to send little doesn't hold quality down when it starts moving.
         /// </summary>
         public int SuggestedBitrateKbps(int maximumKbps)
         {
             lock (_stateLock)
             {
-                int best = maximumKbps;
-                bool any = false;
-                foreach (StreamLink link in _streamLinks.Values)
-                {
-                    if (!link.IsSender || link.ViewerKbps < 0)
-                        continue;
-                    any = true;
-                    int allowed = link.ViewerLossPermille > 30 ? (int)(link.ViewerKbps * 0.8) : (int)(link.ViewerKbps * 1.25) + 500;
-                    best = Math.Min(best, allowed);
-                }
-                return any ? Math.Max(500, best) : maximumKbps;
+                if (_bitrate == null)
+                    _bitrate = new BitrateController(maximumKbps);
+                else
+                    _bitrate.SetMax(maximumKbps);
+                return _bitrate.CurrentKbps;
             }
         }
 
@@ -279,11 +364,17 @@ namespace Maela
                 foreach (StreamLink link in _streamLinks.Values)
                     if (link.IsSender && link.StreamId == _localStreamId) viewers.Add(link);
             }
-            if (viewers.Count == 0)
+            SendScheduler scheduler = _scheduler;
+            if (viewers.Count == 0 || scheduler == null)
                 return;
 
             uint number = ++_nextFrameNumber;
             int count = (frame.Length + MediaFragmentBytes - 1) / MediaFragmentBytes;
+            int group = _parityGroup;
+            int parityCount = group > 0 ? (count + group - 1) / group : 0;
+            byte[][] all = new byte[count][];
+            PacedPacket[] packets = new PacedPacket[(count + parityCount) * viewers.Count];
+            int next = 0;
             for (int i = 0; i < count; i++)
             {
                 int offset = i * MediaFragmentBytes;
@@ -295,10 +386,331 @@ namespace Maela
                 Buffer.BlockCopy(BitConverter.GetBytes((ushort)count), 0, media, 7, 2);
                 media[9] = keyframe ? (byte)1 : (byte)0;
                 Buffer.BlockCopy(frame, offset, media, 10, length);
+                all[i] = media;
                 foreach (StreamLink link in viewers)
-                    SendMedia(link, media);
+                    packets[next++] = new PacedPacket(link, media);
+            }
+            for (int p = 0; p < parityCount; p++)
+            {
+                byte[] parity = BuildParity(all, number, count, keyframe, p * group, Math.Min(group, count - p * group));
+                foreach (StreamLink link in viewers)
+                    packets[next++] = new PacedPacket(link, parity);
+            }
+            RememberSent(number, all, frame.Length);
+            scheduler.EnqueueVideo(packets, keyframe);
+        }
+
+        private const int ParityHeaderBytes = 14;
+
+        /// <summary>type, frame, first fragment, fragments covered, frame's fragments, keyframe, XOR of lengths, XOR of data.</summary>
+        private static byte[] BuildParity(byte[][] fragments, uint number, int count, bool keyframe, int first, int covered)
+        {
+            int longest = 0;
+            for (int i = first; i < first + covered; i++)
+                longest = Math.Max(longest, fragments[i].Length - 10);
+            byte[] parity = new byte[ParityHeaderBytes + longest];
+            parity[0] = MediaParity;
+            Buffer.BlockCopy(BitConverter.GetBytes(number), 0, parity, 1, 4);
+            Buffer.BlockCopy(BitConverter.GetBytes((ushort)first), 0, parity, 5, 2);
+            Buffer.BlockCopy(BitConverter.GetBytes((ushort)covered), 0, parity, 7, 2);
+            Buffer.BlockCopy(BitConverter.GetBytes((ushort)count), 0, parity, 9, 2);
+            parity[11] = keyframe ? (byte)1 : (byte)0;
+            ushort lengths = 0;
+            for (int i = first; i < first + covered; i++)
+            {
+                int length = fragments[i].Length - 10;
+                lengths ^= (ushort)length;
+                FecXor.Mix(parity, ParityHeaderBytes, fragments[i], 10, length);
+            }
+            Buffer.BlockCopy(BitConverter.GetBytes(lengths), 0, parity, 12, 2);
+            return parity;
+        }
+
+        private void RememberSent(uint number, byte[][] fragments, int bytes)
+        {
+            lock (_stateLock)
+            {
+                _sentFrames[number] = fragments;
+                _sentOrder.Enqueue(number);
+                _sentFrameBytes += bytes;
+                while (_sentOrder.Count > KeepSentFrames || (_sentFrameBytes > KeepSentBytes && _sentOrder.Count > 1))
+                {
+                    uint oldest = _sentOrder.Dequeue();
+                    byte[][] old;
+                    if (_sentFrames.TryGetValue(oldest, out old))
+                    {
+                        foreach (byte[] fragment in old)
+                            _sentFrameBytes -= fragment.Length - 10;
+                        _sentFrames.Remove(oldest);
+                    }
+                }
             }
         }
+
+        /// <summary>Sharer: a viewer asks for lost fragments again.</summary>
+        private void HandleResendRequest(StreamLink link, byte[] media)
+        {
+            if (media.Length < 6 || media[5] == 0 || media.Length != 6 + media[5] * 2 || media[5] > ResendMaxPerRequest)
+                return;
+            SendScheduler scheduler = _scheduler;
+            if (scheduler == null)
+                return;
+            uint number = BitConverter.ToUInt32(media, 1);
+            List<PacedPacket> packets = new List<PacedPacket>();
+            lock (_stateLock)
+            {
+                byte[][] fragments;
+                if (!_sentFrames.TryGetValue(number, out fragments))
+                    return;
+                DateTime now = DateTime.UtcNow;
+                if ((now - link.ResendBudgetUtc).TotalSeconds >= 1)
+                {
+                    link.ResendBudgetUtc = now;
+                    link.ResendBudget = ResendMaxPerSecond;
+                }
+                for (int i = 0; i < media[5] && link.ResendBudget > 0; i++)
+                {
+                    int index = BitConverter.ToUInt16(media, 6 + i * 2);
+                    if (index >= fragments.Length)
+                        continue;
+                    packets.Add(new PacedPacket(link, fragments[index]));
+                    link.ResendBudget--;
+                }
+            }
+            Interlocked.Add(ref _resentFragments, packets.Count);
+            scheduler.EnqueueResend(packets.ToArray());
+        }
+
+        // ===== Stream sound =====
+
+        /// <summary>Sends one Opus frame of the shared screen's sound to everyone watching. Goes ahead of video, behind voice.</summary>
+        public void SendStreamAudio(uint sequence, byte[] opus)
+        {
+            if (_localStreamId == 0 || opus == null || opus.Length == 0)
+                return;
+            List<StreamLink> viewers = new List<StreamLink>();
+            lock (_stateLock)
+            {
+                foreach (StreamLink link in _streamLinks.Values)
+                    if (link.IsSender && link.StreamId == _localStreamId) viewers.Add(link);
+            }
+            if (viewers.Count == 0)
+                return;
+            byte[] media = new byte[5 + opus.Length];
+            media[0] = MediaAudio;
+            Buffer.BlockCopy(BitConverter.GetBytes(sequence), 0, media, 1, 4);
+            Buffer.BlockCopy(opus, 0, media, 5, opus.Length);
+            foreach (StreamLink link in viewers)
+                SendMedia(link, media);
+        }
+
+        /// <summary>How loud a stream you're watching plays: 0 to 100, 0 being muted.</summary>
+        public void SetStreamVolume(uint sharerId, int volume)
+        {
+            volume = Math.Max(0, Math.Min(100, volume));
+            List<PlaybackStream> playing = new List<PlaybackStream>();
+            lock (_stateLock)
+            {
+                _streamVolume[sharerId] = volume;
+                foreach (StreamLink link in _streamLinks.Values)
+                {
+                    if (!link.IsSender && link.PeerId == sharerId && link.AudioPlayback != null)
+                        playing.Add(link.AudioPlayback);
+                }
+            }
+            foreach (PlaybackStream stream in playing)
+                stream.SetGain(volume / 100f);
+        }
+
+        private void ReceiveStreamAudio(StreamLink link, byte[] media)
+        {
+            if (media.Length < 6 || media.Length > 5 + StreamAudioEncoder.MaxPacketBytes)
+                return;
+            if (link.AudioDecoder == null)
+                link.AudioDecoder = new StreamAudioDecoder();
+            _audioFrames.Clear();
+            link.AudioDecoder.Decode(BitConverter.ToUInt32(media, 1), media, 5, media.Length - 5, _audioFrames);
+            if (_deafened)
+                return;
+            foreach (byte[] frame in _audioFrames)
+            {
+                link.AudioFrames++;
+                Action<uint, byte[]> tap = StreamAudioForTests;
+                if (tap != null)
+                    tap(link.PeerId, frame);
+                PlaybackStream playback = PlaybackFor(link);
+                if (playback != null)
+                    playback.Enqueue(frame);
+            }
+        }
+
+        private PlaybackStream PlaybackFor(StreamLink link)
+        {
+            if (link.AudioPlayback != null || link.AudioPlaybackFailed || (HeadlessForTests && !PlayStreamAudioForTests))
+                return link.AudioPlayback;
+            WAVEFORMATEX format = new WAVEFORMATEX();
+            format.wFormatTag = 1;
+            format.nChannels = StreamAudioEncoder.Channels;
+            format.nSamplesPerSec = StreamAudioEncoder.SampleRate;
+            format.wBitsPerSample = 16;
+            format.nBlockAlign = (ushort)(StreamAudioEncoder.Channels * 2);
+            format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+            try
+            {
+                // Through the echo canceller's reference, so speakers don't put the stream into the mic.
+                PlaybackStream created = new PlaybackStream(format, _outputDeviceId, _farEnd);
+                int volume;
+                lock (_stateLock)
+                {
+                    if (!_streamVolume.TryGetValue(link.PeerId, out volume))
+                        volume = 100;
+                }
+                created.SetGain(volume / 100f);
+                link.AudioPlayback = created;
+            }
+            catch
+            {
+                link.AudioPlaybackFailed = true; // No speakers: the picture carries on.
+            }
+            return link.AudioPlayback;
+        }
+
+        // ===== Pacing =====
+
+        private void StartScheduler()
+        {
+            _scheduler = new SendScheduler(
+                delegate(object link, byte[] media) { SendMedia((StreamLink)link, media); },
+                delegate(object target, byte[] forward) { SendPacket((IPEndPoint)target, PacketRelayMedia, _localId, 0, forward); },
+                OnVideoDropped);
+        }
+
+        private void StopScheduler()
+        {
+            SendScheduler scheduler = _scheduler;
+            _scheduler = null;
+            if (scheduler != null)
+                scheduler.Dispose();
+        }
+
+        /// <summary>Frames were dropped before sending, so viewers can't decode what follows until a keyframe.</summary>
+        private void OnVideoDropped()
+        {
+            DateTime now = DateTime.UtcNow;
+            if ((now - _lastPacerKeyframeUtc).TotalMilliseconds < 1000)
+                return; // A keyframe costs more than the frames lost; don't add to the congestion.
+            _lastPacerKeyframeUtc = now;
+            _keyframeRequested = true;
+        }
+
+        /// <summary>
+        /// Twice a second, from viewers' reports. Sets the encoder's bitrate and how much parity to
+        /// send, and keeps congestion in our own queue, where it can't delay voice, instead of the
+        /// router's: when a viewer loses packets, video is held near what actually gets through;
+        /// while the loss stays away the limit lifts again.
+        /// </summary>
+        private void UpdateVideoCap(DateTime now)
+        {
+            SendScheduler scheduler = _scheduler;
+            if (scheduler == null || _localStreamId == 0 || (now - _lastVideoCapUtc).TotalMilliseconds < 500)
+                return;
+            _lastVideoCapUtc = now;
+            long receivedKbps = 0;
+            int worstLoss = 0, worstRise = 0, viewers = 0;
+            bool anyProbes = false;
+            lock (_stateLock)
+            {
+                foreach (StreamLink link in _streamLinks.Values)
+                {
+                    if (!link.IsSender || link.ViewerKbps < 0)
+                        continue;
+                    viewers++;
+                    receivedKbps += link.ViewerKbps;
+                    worstLoss = Math.Max(worstLoss, link.ViewerLossPermille);
+                    if (link.RttMs >= 0)
+                    {
+                        anyProbes = true;
+                        worstRise = Math.Max(worstRise, (int)(link.RttMs - link.BaseRttMs));
+                    }
+                }
+                if (viewers > 0 && _bitrate != null)
+                    _bitrate.Update(_clock.ElapsedMilliseconds, worstLoss, worstRise);
+                int wanted = FecXor.GroupSizeForLoss(worstLoss);
+                if (wanted > 0)
+                {
+                    _parityGroup = _parityGroup == 0 ? wanted : Math.Min(_parityGroup, wanted);
+                    _parityUntilUtc = now.AddSeconds(ParityHoldSeconds);
+                }
+                else if (now > _parityUntilUtc)
+                    _parityGroup = 0;
+            }
+            if (viewers == 0)
+                return;
+            // Loss alone can just be bad Wi-Fi, and holding video back then only loses more of it.
+            // Loss with rising ping means a queue is filling. No probe replies (an older viewer): go by loss.
+            if (worstLoss > 30 && (worstRise > CongestionRiseMs || !anyProbes))
+            {
+                long arriving = receivedKbps * 125 * 1000 / Math.Max(1, 1000 - worstLoss); // Bytes per second sent, allowing for what was lost.
+                long limit = Math.Max(SendScheduler.MinRateBytes * viewers, arriving * 3 / 2);
+                _videoCapBytes = _videoCapBytes == 0 ? limit : Math.Min(_videoCapBytes, limit);
+            }
+            else if (_videoCapBytes > 0)
+            {
+                _videoCapBytes = _videoCapBytes * 5 / 4;
+                if (_videoCapBytes > SendScheduler.MaxRateBytes)
+                    _videoCapBytes = 0;
+            }
+            scheduler.SetVideoCap(_videoCapBytes);
+        }
+
+        public ShareNetworkStats GetShareNetworkStats()
+        {
+            ShareNetworkStats stats = new ShareNetworkStats();
+            SendScheduler scheduler = _scheduler;
+            if (scheduler != null)
+            {
+                stats.QueuedBytes = scheduler.QueuedVideoBytes;
+                stats.DroppedFrames = scheduler.DroppedFrames;
+            }
+            stats.ResentFragments = Interlocked.Read(ref _resentFragments);
+            lock (_stateLock)
+            {
+                stats.ParityGroup = _parityGroup;
+                foreach (StreamLink link in _streamLinks.Values)
+                {
+                    if (!link.IsSender)
+                        continue;
+                    stats.LossPermille = Math.Max(stats.LossPermille, link.ViewerLossPermille);
+                    stats.RttMs = Math.Max(stats.RttMs, (int)link.RttMs);
+                }
+            }
+            return stats;
+        }
+
+        public WatchNetworkStats GetWatchNetworkStats(uint sharerId)
+        {
+            lock (_stateLock)
+            {
+                foreach (StreamLink link in _streamLinks.Values)
+                {
+                    if (link.IsSender || link.PeerId != sharerId)
+                        continue;
+                    WatchNetworkStats stats = new WatchNetworkStats();
+                    stats.Kbps = link.LastKbps;
+                    stats.LossPermille = link.LastLossPermille;
+                    stats.Repaired = link.Repaired;
+                    stats.Lost = link.Lost;
+                    stats.KeyframeRequests = link.KeyframeRequests;
+                    stats.AudioFrames = link.AudioFrames;
+                    stats.AudioConcealed = link.AudioDecoder == null ? 0 : link.AudioDecoder.Concealed;
+                    return stats;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>Tests only.</summary>
+        internal SendScheduler SchedulerForTests { get { return _scheduler; } }
 
         // ===== Watching =====
 
@@ -621,7 +1033,12 @@ namespace Maela
                 return;
             byte[] forward = (byte[])p.Clone();
             Buffer.BlockCopy(BitConverter.GetBytes(fromId), 0, forward, 0, 4); // Receivers learn who it's from.
-            SendPacket(target.Endpoint, PacketRelayMedia, _localId, 0, forward);
+            // Whole-size ones are video. Keyframe requests, reports, punches and sound don't wait behind it.
+            SendScheduler scheduler = _scheduler;
+            if (scheduler != null && p.Length > 4 + MediaAdBytes + PacketCipher.Overhead + 5 + StreamAudioEncoder.MaxPacketBytes)
+                scheduler.EnqueueRelay(target.Endpoint, forward);
+            else
+                SendPacket(target.Endpoint, PacketRelayMedia, _localId, 0, forward);
         }
 
         private Participant FindParticipantLocked(uint id)
@@ -789,6 +1206,14 @@ namespace Maela
             if (length < MediaAdBytes || data[5] != OuterMedia)
                 return false;
             uint fromId = BitConverter.ToUInt32(data, 6);
+            if (IncomingMediaLossForTests > 0.0)
+            {
+                lock (_testLossRandom)
+                {
+                    if (_testLossRandom.NextDouble() < IncomingMediaLossForTests)
+                        return true;
+                }
+            }
             HandleSealedMedia(fromId, data, 0, length, sender);
             return true;
         }
@@ -837,7 +1262,37 @@ namespace Maela
                     return;
                 case MediaKeyframeRequest:
                     if (link.IsSender)
-                        _keyframeRequested = true;
+                    {
+                        DateTime now = DateTime.UtcNow;
+                        if ((now - _lastViewerKeyframeUtc).TotalMilliseconds >= KeyframeRequestGapMs)
+                        {
+                            _lastViewerKeyframeUtc = now;
+                            _keyframeRequested = true;
+                        }
+                    }
+                    return;
+                case MediaResend:
+                    if (link.IsSender)
+                        HandleResendRequest(link, media);
+                    return;
+                case MediaParity:
+                    if (!link.IsSender)
+                        ReceiveParity(link, media);
+                    return;
+                case MediaAudio:
+                    if (!link.IsSender)
+                        ReceiveStreamAudio(link, media);
+                    return;
+                case MediaProbe:
+                    if (!link.IsSender && media.Length == 9)
+                    {
+                        media[0] = MediaProbeReply;
+                        SendMedia(link, media);
+                    }
+                    return;
+                case MediaProbeReply:
+                    if (link.IsSender && media.Length == 9)
+                        NoteProbeReply(link, BitConverter.ToInt64(media, 1));
                     return;
                 case MediaReport:
                     if (link.IsSender && media.Length == 1 + 4 + 2)
@@ -863,76 +1318,266 @@ namespace Maela
                 (index < count - 1 && length != MediaFragmentBytes) || length > MediaFragmentBytes)
                 return;
 
-            byte[] complete = null;
-            bool completeKey = false;
+            List<KeyValuePair<byte[], bool>> deliver = new List<KeyValuePair<byte[], bool>>();
             bool requestKeyframe = false;
-            uint sharer = link.PeerId;
+            byte[] resend = null;
             lock (_stateLock)
             {
                 link.ReportBytes += media.Length;
                 link.ReportFragments++;
                 if (link.AnyDelivered && (int)(number - link.LastDelivered) <= 0)
                     return; // Old.
-                FrameAssembly frame;
-                if (!link.Frames.TryGetValue(number, out frame))
-                {
-                    if (link.Frames.Count >= MaxPendingFrames)
-                        DropOldestFrame(link);
-                    frame = new FrameAssembly();
-                    frame.Fragments = new byte[count][];
-                    frame.Keyframe = keyframe;
-                    link.Frames[number] = frame;
-                }
+                FrameAssembly frame = FrameFor(link, number, count, keyframe);
                 if (frame.Fragments.Length != count || frame.Fragments[index] != null)
                     return;
                 byte[] data = new byte[length];
                 Buffer.BlockCopy(media, 10, data, 0, length);
                 frame.Fragments[index] = data;
                 frame.Received++;
-                if (frame.Received < count)
-                    return;
+                TryParity(link, frame);
+                AdvanceFrames(link, DateTime.UtcNow, deliver, ref requestKeyframe);
+                resend = NextResendRequest(link, number, DateTime.UtcNow);
+            }
+            FinishReceive(link, deliver, requestKeyframe, resend);
+        }
 
-                // Complete. Anything older still pending was lost.
-                link.Frames.Remove(number);
-                List<uint> older = new List<uint>();
+        private void ReceiveParity(StreamLink link, byte[] media)
+        {
+            if (media.Length < ParityHeaderBytes + 1 || media.Length > ParityHeaderBytes + MediaFragmentBytes)
+                return;
+            uint number = BitConverter.ToUInt32(media, 1);
+            int first = BitConverter.ToUInt16(media, 5), covered = BitConverter.ToUInt16(media, 7), count = BitConverter.ToUInt16(media, 9);
+            if (count == 0 || covered == 0 || first + covered > count || (long)count * MediaFragmentBytes > MaxFrameBytes + MediaFragmentBytes)
+                return;
+
+            List<KeyValuePair<byte[], bool>> deliver = new List<KeyValuePair<byte[], bool>>();
+            bool requestKeyframe = false;
+            lock (_stateLock)
+            {
+                link.ReportBytes += media.Length;
+                if (link.AnyDelivered && (int)(number - link.LastDelivered) <= 0)
+                    return;
+                FrameAssembly frame = FrameFor(link, number, count, media[11] == 1);
+                if (frame.Fragments.Length != count)
+                    return;
+                if (frame.Parity == null)
+                    frame.Parity = new List<byte[]>();
+                if (frame.Parity.Count >= count)
+                    return;
+                frame.Parity.Add(media);
+                TryParity(link, frame);
+                AdvanceFrames(link, DateTime.UtcNow, deliver, ref requestKeyframe);
+            }
+            FinishReceive(link, deliver, requestKeyframe, null);
+        }
+
+        private void FinishReceive(StreamLink link, List<KeyValuePair<byte[], bool>> deliver, bool requestKeyframe, byte[] resend)
+        {
+            if (resend != null)
+                SendMedia(link, resend);
+            if (requestKeyframe)
+                RequestKeyframe(link);
+            Action<uint, byte[], bool> sink = VideoFrameReceived;
+            if (sink != null)
+            {
+                foreach (KeyValuePair<byte[], bool> item in deliver)
+                    sink(link.PeerId, item.Key, item.Value);
+            }
+        }
+
+        private static FrameAssembly FrameFor(StreamLink link, uint number, int count, bool keyframe)
+        {
+            FrameAssembly frame;
+            if (!link.Frames.TryGetValue(number, out frame))
+            {
+                if (link.Frames.Count >= MaxPendingFrames)
+                    DropOldestFrame(link);
+                frame = new FrameAssembly();
+                frame.Fragments = new byte[count][];
+                frame.Keyframe = keyframe;
+                link.Frames[number] = frame;
+            }
+            return frame;
+        }
+
+        /// <summary>Rebuilds any fragment that is the only one missing from a parity group.</summary>
+        private static void TryParity(StreamLink link, FrameAssembly frame)
+        {
+            if (frame.Parity == null || frame.Complete)
+                return;
+            foreach (byte[] parity in frame.Parity)
+            {
+                int first = BitConverter.ToUInt16(parity, 5), covered = BitConverter.ToUInt16(parity, 7);
+                int missing = -1, missingCount = 0;
+                for (int i = first; i < first + covered && i < frame.Fragments.Length; i++)
+                {
+                    if (frame.Fragments[i] == null)
+                    {
+                        missing = i;
+                        missingCount++;
+                    }
+                }
+                if (missingCount != 1)
+                    continue;
+                int length = BitConverter.ToUInt16(parity, 12);
+                for (int i = first; i < first + covered; i++)
+                {
+                    if (i != missing)
+                        length ^= frame.Fragments[i].Length;
+                }
+                // Parity comes through the same authenticated link, but sizes still get checked.
+                bool last = missing == frame.Fragments.Length - 1;
+                if (length <= 0 || length > MediaFragmentBytes || (!last && length != MediaFragmentBytes) || length > parity.Length - ParityHeaderBytes)
+                    continue;
+                byte[] rebuilt = new byte[length];
+                Buffer.BlockCopy(parity, ParityHeaderBytes, rebuilt, 0, length);
+                for (int i = first; i < first + covered; i++)
+                {
+                    if (i != missing)
+                        FecXor.Mix(rebuilt, 0, frame.Fragments[i], 0, Math.Min(length, frame.Fragments[i].Length));
+                }
+                frame.Fragments[missing] = rebuilt;
+                frame.Received++;
+                link.Repaired++;
+                link.ReportLostFragments++; // It was still lost: the bitrate should know.
+            }
+        }
+
+        /// <summary>
+        /// Hands over finished frames strictly in order. When one is damaged, later ones wait
+        /// briefly for the repair; if none comes, or a newer keyframe makes it pointless, it's
+        /// skipped and the viewer waits for a keyframe as it must.
+        /// </summary>
+        private void AdvanceFrames(StreamLink link, DateTime now, List<KeyValuePair<byte[], bool>> deliver, ref bool requestKeyframe)
+        {
+            while (true)
+            {
+                bool anyComplete = false, anyKey = false;
+                uint oldestComplete = 0, newestKey = 0;
                 foreach (KeyValuePair<uint, FrameAssembly> pair in link.Frames)
-                    if ((int)(pair.Key - number) < 0) older.Add(pair.Key);
+                {
+                    if (!pair.Value.Complete)
+                        continue;
+                    if (!anyComplete || (int)(pair.Key - oldestComplete) < 0)
+                        oldestComplete = pair.Key;
+                    anyComplete = true;
+                    if (pair.Value.Keyframe && (!anyKey || (int)(pair.Key - newestKey) > 0))
+                    {
+                        newestKey = pair.Key;
+                        anyKey = true;
+                    }
+                }
+                if (!anyComplete)
+                {
+                    link.GapSinceUtc = DateTime.MinValue;
+                    return;
+                }
+
+                uint target;
+                if (!link.AnyDelivered)
+                    target = anyKey ? newestKey : oldestComplete;
+                else if (oldestComplete == link.LastDelivered + 1)
+                    target = oldestComplete;
+                else if (anyKey)
+                    target = newestKey;
+                else
+                {
+                    if (link.GapSinceUtc == DateTime.MinValue)
+                        link.GapSinceUtc = now;
+                    if ((now - link.GapSinceUtc).TotalMilliseconds < RecoveryWaitMs)
+                        return;
+                    target = oldestComplete;
+                }
+
+                bool skipped = link.AnyDelivered && target != link.LastDelivered + 1;
+                List<uint> older = new List<uint>();
+                foreach (uint n in link.Frames.Keys)
+                {
+                    if ((int)(n - target) < 0)
+                        older.Add(n);
+                }
                 foreach (uint o in older)
                 {
                     FrameAssembly lost = link.Frames[o];
-                    link.ReportLostFragments += lost.Fragments.Length - lost.Received;
+                    int missing = lost.Fragments.Length - lost.Received;
+                    link.Lost += missing;
+                    link.ReportLostFragments += Math.Max(0, missing - lost.ResendAsked); // Those it asked for are already counted.
                     link.Frames.Remove(o);
                 }
-                bool gap = link.AnyDelivered && number != link.LastDelivered + 1;
-                if (gap || older.Count > 0)
+                if (skipped || older.Count > 0)
                     link.WaitingForKeyframe = true;
-                link.LastDelivered = number;
+
+                FrameAssembly frame = link.Frames[target];
+                link.Frames.Remove(target);
+                link.GapSinceUtc = DateTime.MinValue;
+                link.LastDelivered = target;
                 link.AnyDelivered = true;
                 if (link.WaitingForKeyframe && !frame.Keyframe)
                 {
                     requestKeyframe = true; // Can't decode this cleanly; wait for a keyframe.
+                    continue;
                 }
-                else
+                link.WaitingForKeyframe = false;
+                int total = 0;
+                foreach (byte[] fragment in frame.Fragments)
+                    total += fragment.Length;
+                byte[] complete = new byte[total];
+                int at = 0;
+                foreach (byte[] fragment in frame.Fragments)
                 {
-                    link.WaitingForKeyframe = false;
-                    complete = new byte[(count - 1) * MediaFragmentBytes + frame.Fragments[count - 1].Length];
-                    int at = 0;
-                    for (int i = 0; i < count; i++)
-                    {
-                        Buffer.BlockCopy(frame.Fragments[i], 0, complete, at, frame.Fragments[i].Length);
-                        at += frame.Fragments[i].Length;
-                    }
-                    completeKey = frame.Keyframe;
+                    Buffer.BlockCopy(fragment, 0, complete, at, fragment.Length);
+                    at += fragment.Length;
+                }
+                deliver.Add(new KeyValuePair<byte[], bool>(complete, frame.Keyframe));
+            }
+        }
+
+        /// <summary>The oldest damaged frame behind the newest one seen, if it's time to ask for what it lacks.</summary>
+        private static byte[] NextResendRequest(StreamLink link, uint newest, DateTime now)
+        {
+            bool found = false;
+            uint chosen = 0;
+            foreach (KeyValuePair<uint, FrameAssembly> pair in link.Frames)
+            {
+                if ((int)(pair.Key - newest) >= 0 || pair.Value.Complete || pair.Value.ResendTries >= ResendTries)
+                    continue;
+                if ((now - pair.Value.FirstUtc).TotalMilliseconds < ResendAfterMs || (now - pair.Value.LastResendUtc).TotalMilliseconds < ResendRetryMs)
+                    continue;
+                if (!found || (int)(pair.Key - chosen) < 0)
+                {
+                    chosen = pair.Key;
+                    found = true;
                 }
             }
-            if (requestKeyframe)
-                RequestKeyframe(link);
-            if (complete != null)
+            if (!found)
+                return null;
+            FrameAssembly frame = link.Frames[chosen];
+            frame.LastResendUtc = now;
+            frame.ResendTries++;
+            int missing = frame.Fragments.Length - frame.Received;
+            if (missing > ResendMaxPerRequest)
             {
-                Action<uint, byte[], bool> sink = VideoFrameReceived;
-                if (sink != null)
-                    sink(sharer, complete, completeKey);
+                frame.ResendTries = ResendTries; // Too much lost: a keyframe is the better fix.
+                return null;
             }
+            byte[] request = new byte[6 + missing * 2];
+            request[0] = MediaResend;
+            Buffer.BlockCopy(BitConverter.GetBytes(chosen), 0, request, 1, 4);
+            request[5] = (byte)missing;
+            int next = 6;
+            for (int i = 0; i < frame.Fragments.Length; i++)
+            {
+                if (frame.Fragments[i] != null)
+                    continue;
+                Buffer.BlockCopy(BitConverter.GetBytes((ushort)i), 0, request, next, 2);
+                next += 2;
+            }
+            if (frame.ResendTries == 1)
+            {
+                frame.ResendAsked = missing;
+                link.ReportLostFragments += missing;
+            }
+            return request;
         }
 
         private static void DropOldestFrame(StreamLink link)
@@ -946,9 +1591,25 @@ namespace Maela
             if (!first)
             {
                 FrameAssembly lost = link.Frames[oldest];
-                link.ReportLostFragments += lost.Fragments.Length - lost.Received;
+                int missing = lost.Fragments.Length - lost.Received;
+                link.Lost += missing;
+                link.ReportLostFragments += Math.Max(0, missing - lost.ResendAsked);
                 link.Frames.Remove(oldest);
                 link.WaitingForKeyframe = true;
+            }
+        }
+
+        /// <summary>Sharer: how long a probe took there and back. It waits in the same router queue as video, so a rise means congestion.</summary>
+        private void NoteProbeReply(StreamLink link, long sentTicks)
+        {
+            double ms = (_clock.ElapsedTicks - sentTicks) * 1000.0 / Stopwatch.Frequency;
+            if (ms < 0 || ms > 5000)
+                return;
+            lock (_stateLock)
+            {
+                link.RttMs = link.RttMs < 0 ? ms : link.RttMs + (ms - link.RttMs) * 0.3;
+                // The lowest seen is the empty-queue baseline; it drifts up in case the route changes.
+                link.BaseRttMs = link.BaseRttMs < 0 || link.RttMs < link.BaseRttMs ? link.RttMs : link.BaseRttMs + 0.05;
             }
         }
 
@@ -958,12 +1619,15 @@ namespace Maela
             if ((now - link.LastKeyframeRequestUtc).TotalMilliseconds < 300)
                 return;
             link.LastKeyframeRequestUtc = now;
+            lock (_stateLock)
+                link.KeyframeRequests++;
             SendMedia(link, new byte[] { MediaKeyframeRequest });
         }
 
         /// <summary>Both roles, from the maintenance loop: punching, keyframe requests and reports.</summary>
         private void StreamLinkMaintenance(DateTime now)
         {
+            UpdateVideoCap(now);
             List<StreamLink> links;
             lock (_stateLock)
                 links = new List<StreamLink>(_streamLinks.Values);
@@ -976,7 +1640,21 @@ namespace Maela
                     Punch(link);
 
                 if (link.IsSender)
+                {
+                    byte[] probe = new byte[9];
+                    probe[0] = MediaProbe;
+                    Buffer.BlockCopy(BitConverter.GetBytes(_clock.ElapsedTicks), 0, probe, 1, 8);
+                    SendMedia(link, probe);
                     continue;
+                }
+
+                // Frames may be waiting on a repair that won't come, with nothing arriving to notice.
+                List<KeyValuePair<byte[], bool>> deliver = new List<KeyValuePair<byte[], bool>>();
+                bool needKeyframe = false;
+                lock (_stateLock)
+                    AdvanceFrames(link, now, deliver, ref needKeyframe);
+                FinishReceive(link, deliver, needKeyframe, null);
+
                 if (link.WaitingForKeyframe && (now - link.CreatedUtc).TotalMilliseconds > 200)
                     RequestKeyframe(link);
                 double seconds = (now - link.LastReportUtc).TotalSeconds;
@@ -992,6 +1670,8 @@ namespace Maela
                     link.LastReportUtc = now;
                     int kbps = (int)Math.Min(1000000, bytes * 8 / 1000 / seconds);
                     int lossPermille = fragments + lost == 0 ? 0 : (int)(1000L * lost / (fragments + lost));
+                    link.LastKbps = kbps;
+                    link.LastLossPermille = lossPermille;
                     byte[] report = new byte[7];
                     report[0] = MediaReport;
                     Buffer.BlockCopy(BitConverter.GetBytes((uint)kbps), 0, report, 1, 4);

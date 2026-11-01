@@ -98,6 +98,35 @@ authentication, arrives twice, or is older than the 1,024-packet replay window.
   AES-256-CTR + HMAC-SHA256 with a replay window. Video frames are H.264, split into 1,100-byte
   fragments; viewers rebuild them, ask for a keyframe after any loss and report received
   bitrate and loss every 0.5 s.
+- Video also has three optional media types; older copies ignore them and still exchange plain
+  video. PARITY (4): XOR of a group of fragments, sent only after a viewer reports loss, more
+  of it at higher loss; it rebuilds one lost fragment per group. RESEND (5): a viewer asks for
+  fragments again, 15 ms after a later frame shows they're missing, at most twice per frame and
+  2,000 fragments a second per viewer. PROBE (6) and its reply (7): the sharer's ping, 4 times a
+  second, whose rise above its usual value warns of congestion before anything is lost.
+- The viewer draws with Direct3D 11 (GDI if that fails). It decodes with Windows' H.264 decoder
+  on the graphics card at 1080p and above by default (Settings > App), after `H264StreamCheck`
+  allows only 8-bit 4:2:0 progressive baseline, main or high within the size limits, and strips
+  SEI. A refusal or any decoder error switches that stream to OpenH264 for good, replaying from the
+  last keyframe.
+- AUDIO (media type 8, ignored by older copies): sequence (4) and one 20 ms stereo Opus frame at
+  up to 128 kbps. Goes straight to the socket, unpaced, and isn't sent during silence. Captured
+  with Windows' per-process loopback, leaving out mæla's process tree, or only the shared window's
+  process tree. It isn't timed against the video: both are kept low-latency instead.
+- Viewers hand frames over strictly in order. Frames after a damaged one wait up to 120 ms for
+  the repair; if none comes (or a newer keyframe arrives) it's skipped and the viewer waits for
+  a keyframe. Repaired fragments still count as lost in reports, so the bitrate reacts.
+- The sharer lowers the bitrate on loss over 3% (by 15%, or 30% over 10%) or a 60 ms rise in
+  ping (by 10%), at most once a second, and climbs back 5% every 0.5 s after 3 quiet seconds. A
+  screen that simply isn't sending much doesn't lower it. Keyframes come every 8 s, or on
+  request at most every 0.5 s.
+- Sending is paced (`SendScheduler`). Voice and control packets go straight to the socket;
+  video and relayed video leave evenly from their own thread and are encrypted as they go. The
+  rate is 2.5x the recent average, or enough to clear the backlog within 66 ms. A waiting
+  frame is dropped when a new keyframe replaces it, or (with the frames that depend on it) after
+  waiting 300 ms. When a viewer reports over 3% loss and ping has risen over 30 ms, a queue is
+  filling, so the sharer limits video to 1.5x what it's getting through, then raises the limit by
+  25% every 0.5 s once that stops. Loss without rising ping (bad Wi-Fi) isn't limited this way.
 
 ### Leaving and coming back
 

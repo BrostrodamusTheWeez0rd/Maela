@@ -169,7 +169,7 @@ namespace Maela
     }
 
     /// <summary>Encodes I420 frames to H.264 (Annex B) with OpenH264, tuned for screen content and low delay.</summary>
-    internal sealed class H264Encoder : IDisposable
+    internal sealed class H264Encoder : IVideoEncoder
     {
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int CreateEncoderFn(out IntPtr encoder);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate void DestroyEncoderFn(IntPtr encoder);
@@ -177,6 +177,14 @@ namespace Maela
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int UninitializeFn(IntPtr self);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int EncodeFrameFn(IntPtr self, ref SourcePicture picture, IntPtr bitstream);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int ForceIntraFn(IntPtr self, int idr, int layer);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int SetBitrateOptionFn(IntPtr self, int option, ref BitrateInfo info);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BitrateInfo
+        {
+            public int Layer;          // 4 = all layers
+            public int Bitrate;        // bits per second
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct EncParamBase
@@ -205,6 +213,7 @@ namespace Maela
         private readonly IntPtr _bitstream;
         private readonly EncodeFrameFn _encode;
         private readonly ForceIntraFn _forceIntra;
+        private readonly SetBitrateOptionFn _setOption;
         private readonly UninitializeFn _uninitialize;
         private readonly DestroyEncoderFn _destroy;
         private readonly int _width, _height;
@@ -212,6 +221,7 @@ namespace Maela
 
         public int Width { get { return _width; } }
         public int Height { get { return _height; } }
+        public string Name { get { return "OpenH264 (processor)"; } }
 
         public H264Encoder(int width, int height, int fps, int bitrateKbps)
         {
@@ -229,6 +239,7 @@ namespace Maela
             _uninitialize = OpenH264Pack.Slot<UninitializeFn>(encoder, 3);
             _encode = OpenH264Pack.Slot<EncodeFrameFn>(encoder, 4);
             _forceIntra = OpenH264Pack.Slot<ForceIntraFn>(encoder, 6);
+            _setOption = OpenH264Pack.Slot<SetBitrateOptionFn>(encoder, 7);
 
             EncParamBase param = new EncParamBase();
             param.UsageType = 1;
@@ -250,6 +261,16 @@ namespace Maela
         {
             if (!_disposed)
                 _forceIntra(_encoder, 1, -1);
+        }
+
+        public bool SetBitrate(int kbps)
+        {
+            if (_disposed)
+                return false;
+            BitrateInfo info = new BitrateInfo();
+            info.Layer = 4;
+            info.Bitrate = Math.Max(300, kbps) * 1000;
+            return _setOption(_encoder, 5 /* ENCODER_OPTION_BITRATE */, ref info) == 0;
         }
 
         /// <summary>Encodes one frame. Returns Annex B bytes (or null if the encoder skipped it).</summary>

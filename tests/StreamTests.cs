@@ -148,15 +148,34 @@ namespace Maela.Tests
 
                 Console.WriteLine();
                 Console.WriteLine("Packet loss (15% for Bob)");
-                bob.PacketLossForTests = 0.15;
+                bob.IncomingMediaLossForTests = 0.15;
                 Sink lossy = new Sink();
                 bob.VideoFrameReceived = delegate(uint from, byte[] f, bool k) { lossy.Add(f, k); };
+                int lossyFrom = index;
                 Pump(alice, 4.0, ref index, r);
-                bob.PacketLossForTests = 0;
+                bob.IncomingMediaLossForTests = 0;
+                WatchNetworkStats repairs = bob.GetWatchNetworkStats(aliceId);
+                Console.WriteLine("     " + lossy.Frames + " of " + (index - lossyFrom) + " frames arrived; " + repairs.Repaired + " rebuilt from parity, " + repairs.Lost + " fragments unrecovered, " + repairs.KeyframeRequests + " keyframe requests; Alice resent " + alice.GetShareNetworkStats().ResentFragments + ", dropped " + alice.GetShareNetworkStats().DroppedFrames);
+                Check(repairs.Repaired > 0, "error correction rebuilds lost fragments (" + repairs.Repaired + ")");
+                Check(alice.GetShareNetworkStats().ResentFragments > 0, "lost fragments are sent again when asked for (" + alice.GetShareNetworkStats().ResentFragments + ")");
                 Pump(alice, 1.0, ref index, r);
                 Check(lossy.Frames > 20 && lossy.Corrupt == 0, "frames keep arriving intact (" + lossy.Frames + ")");
                 Check(lossy.BadChains == 0, "after a loss, video resumes only from a keyframe (" + lossy.Keyframes + " keyframes)");
                 Check(alice.SuggestedBitrateKbps(12000) < 12000, "the sharer is told to lower quality (" + alice.SuggestedBitrateKbps(12000) + " kbps)");
+
+                Console.WriteLine();
+                Console.WriteLine("A little packet loss (2% for Bob)");
+                bob.IncomingMediaLossForTests = 0.02;
+                Sink light = new Sink();
+                bob.VideoFrameReceived = delegate(uint from, byte[] f, bool k) { light.Add(f, k); };
+                int lightFrom = index;
+                long lightAsked = bob.GetWatchNetworkStats(aliceId).KeyframeRequests;
+                Pump(alice, 4.0, ref index, r);
+                bob.IncomingMediaLossForTests = 0;
+                Pump(alice, 0.5, ref index, r);
+                int lightSent = index - lightFrom;
+                long asked = bob.GetWatchNetworkStats(aliceId).KeyframeRequests - lightAsked;
+                Check(light.Frames >= lightSent * 9 / 10 && light.Corrupt == 0 && light.BadChains == 0, "repairs keep the video going: " + light.Frames + " of " + lightSent + " frames (" + asked + " keyframe requests, Alice dropped " + alice.GetShareNetworkStats().DroppedFrames + " in all)");
 
                 Console.WriteLine();
                 Console.WriteLine("Hostile member");

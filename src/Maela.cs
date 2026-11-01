@@ -33,7 +33,7 @@ namespace Maela
             // A locked-down stream viewer (see StreamViewerHost): just show the stream.
             if (args != null && args.Length >= 3 && args[0] == "--watch")
             {
-                StreamViewerForm.RunHelper(args[1], args[2]);
+                StreamViewerForm.RunHelper(args[1], args[2], args.Length >= 4 && args[3] == "gpu", args.Length >= 5 ? args[4] : null);
                 return;
             }
 
@@ -233,6 +233,14 @@ namespace Maela
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    }
+
+    /// <summary>When the viewer decodes streams on the graphics card. Automatic: at 1080p and above.</summary>
+    internal enum StreamDecodeMode
+    {
+        Automatic = 0,
+        Always = 1,
+        Never = 2
     }
 
     internal enum RoomPresence
@@ -449,8 +457,10 @@ namespace Maela
         public string Status = String.Empty;
         public bool AllowDirectStreams = true; // Off: streams go through the host, so viewers don't learn your IP.
         public bool StreamNoticeShown;
+        public StreamDecodeMode StreamDecode = StreamDecodeMode.Automatic;
         public int ShareHeight = 1080;
         public int ShareFps = 60;
+        public bool ShareAudio = true;
 
         public AppPreferences Clone()
         {
@@ -474,8 +484,10 @@ namespace Maela
             p.Status = Status;
             p.AllowDirectStreams = AllowDirectStreams;
             p.StreamNoticeShown = StreamNoticeShown;
+            p.StreamDecode = StreamDecode;
             p.ShareHeight = ShareHeight;
             p.ShareFps = ShareFps;
+            p.ShareAudio = ShareAudio;
             return p;
         }
     }
@@ -566,8 +578,12 @@ namespace Maela
                     }
                     else if (key == "directstreams2")
                         p.AllowDirectStreams = value != "0";
+                    else if (key == "shareaudio")
+                        p.ShareAudio = value != "0";
                     else if (key == "streamnotice")
                         p.StreamNoticeShown = value == "1";
+                    else if (key == "streamdecode")
+                        p.StreamDecode = value == "1" ? StreamDecodeMode.Always : value == "2" ? StreamDecodeMode.Never : StreamDecodeMode.Automatic;
                     else if (key == "shareheight")
                     {
                         int v; if (Int32.TryParse(value, out v) && (v == 720 || v == 1080 || v == 1440 || v == 2160)) p.ShareHeight = v;
@@ -620,8 +636,10 @@ namespace Maela
                     "status=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(p.Status ?? String.Empty)),
                     "directstreams2=" + (p.AllowDirectStreams ? "1" : "0"),
                     "streamnotice=" + (p.StreamNoticeShown ? "1" : "0"),
+                    "streamdecode=" + (int)p.StreamDecode,
                     "shareheight=" + p.ShareHeight,
-                    "sharefps=" + p.ShareFps
+                    "sharefps=" + p.ShareFps,
+                    "shareaudio=" + (p.ShareAudio ? "1" : "0")
                 });
             }
             catch { }
@@ -876,6 +894,16 @@ namespace Maela
         private IPAddress _natPmpGateway;
         private int _natPmpInternalPort;
 
+        private const int NatPmpLeaseSeconds = 7200;
+        private const int FiniteLeaseSeconds = 7200;
+        private const int PermanentRefreshSeconds = 1800; // Some routers forget "permanent" mappings when they restart.
+
+        private readonly object _renewLock = new object();
+        private System.Threading.Timer _renewTimer;
+        private int _internalPort;
+        private string _internalClient;
+        private int _leaseSeconds;
+
         private UpnpPortMapping(Uri controlUrl, string serviceType, int externalPort, string externalIp)
         {
             _controlUrl = controlUrl;
@@ -884,24 +912,53 @@ namespace Maela
             ExternalIp = externalIp;
         }
 
-        public static UpnpPortMapping TryCreate(int port, string internalClient)
+        public static UpnpPortMapping TryCreate(int port, string internalClient, out string failure)
         {
+            failure = String.Empty;
+            List<Uri> tried = new List<Uri>();
+
+            // The patient multicast search first: some routers only answer when asked one thing at a time.
+            Uri first = DiscoverGatewayMulticast();
+            if (first != null)
+            {
+                tried.Add(first);
+                UpnpPortMapping mapping = TryCreateAt(first, port, internalClient);
+                if (mapping != null)
+                    return mapping;
+            }
+
             foreach (Uri location in DiscoverGatewayLocations())
             {
+                if (tried.Contains(location))
+                    continue;
+                tried.Add(location);
                 UpnpPortMapping mapping = TryCreateAt(location, port, internalClient);
                 if (mapping != null)
                     return mapping;
             }
-            return TryNatPmp(port); // Many routers that don't answer UPnP speak NAT-PMP.
+
+            UpnpPortMapping natPmp = TryNatPmp(port); // Many routers that don't answer UPnP speak NAT-PMP.
+            if (natPmp == null)
+                failure = tried.Count == 0 ? "no router answered" : "the router answered but refused the port";
+            return natPmp;
         }
 
-        private static UpnpPortMapping TryCreateAt(Uri location, int port, string internalClient)
+        internal static UpnpPortMapping TryCreateAt(Uri location, int port, string internalClient)
         {
-            string serviceType;
-            Uri controlUrl;
-            if (!FindWanService(location, out serviceType, out controlUrl))
-                return null;
+            // Tell the router the address it can actually reach; with a VPN up, the PC's
+            // default route is the VPN's address, which the router refuses.
+            string client = LocalAddressToward(location, internalClient);
+            foreach (KeyValuePair<string, Uri> service in FindWanServices(location))
+            {
+                UpnpPortMapping mapping = TryService(service.Value, service.Key, port, client);
+                if (mapping != null)
+                    return mapping;
+            }
+            return null;
+        }
 
+        private static UpnpPortMapping TryService(Uri controlUrl, string serviceType, int port, string internalClient)
+        {
             List<int> candidates = new List<int>();
             candidates.Add(port);
 
@@ -914,22 +971,24 @@ namespace Maela
                     candidates.Add(candidate);
             }
 
+            int lease = 0;
             int i;
             for (i = 0; i < candidates.Count; i++)
             {
                 int externalPort = candidates[i];
-                string body =
-                    "<NewRemoteHost></NewRemoteHost>" +
-                    "<NewExternalPort>" + externalPort + "</NewExternalPort>" +
-                    "<NewProtocol>UDP</NewProtocol>" +
-                    "<NewInternalPort>" + port + "</NewInternalPort>" +
-                    "<NewInternalClient>" + EscapeXml(internalClient) + "</NewInternalClient>" +
-                    "<NewEnabled>1</NewEnabled>" +
-                    "<NewPortMappingDescription>Maela</NewPortMappingDescription>" +
-                    "<NewLeaseDuration>0</NewLeaseDuration>";
-
-                string ignored;
-                if (!Soap(controlUrl, serviceType, "AddPortMapping", body, out ignored))
+                string fault;
+                bool added = AddMapping(controlUrl, serviceType, externalPort, port, internalClient, lease, out fault);
+                if (!added && String.IsNullOrEmpty(fault))
+                    return null; // No answer at all: more tries would only keep the user waiting.
+                if (!added && lease == 0 && !IsPortConflict(fault))
+                {
+                    // Some routers won't accept a mapping with no expiry.
+                    string finiteFault;
+                    added = AddMapping(controlUrl, serviceType, externalPort, port, internalClient, FiniteLeaseSeconds, out finiteFault);
+                    if (added)
+                        lease = FiniteLeaseSeconds;
+                }
+                if (!added)
                     continue;
 
                 string externalIp = String.Empty;
@@ -937,17 +996,79 @@ namespace Maela
                 if (Soap(controlUrl, serviceType, "GetExternalIPAddress", String.Empty, out response))
                     externalIp = ExtractSoapValue(response, "NewExternalIPAddress");
 
-                return new UpnpPortMapping(controlUrl, serviceType, externalPort, externalIp);
+                UpnpPortMapping mapping = new UpnpPortMapping(controlUrl, serviceType, externalPort, externalIp);
+                mapping._internalPort = port;
+                mapping._internalClient = internalClient;
+                mapping._leaseSeconds = lease;
+                mapping.StartRenewing(lease > 0 ? lease / 2 : PermanentRefreshSeconds);
+                return mapping;
             }
 
             return null;
         }
 
+        private static bool AddMapping(Uri controlUrl, string serviceType, int externalPort, int internalPort, string internalClient, int lease, out string fault)
+        {
+            string body =
+                "<NewRemoteHost></NewRemoteHost>" +
+                "<NewExternalPort>" + externalPort + "</NewExternalPort>" +
+                "<NewProtocol>UDP</NewProtocol>" +
+                "<NewInternalPort>" + internalPort + "</NewInternalPort>" +
+                "<NewInternalClient>" + EscapeXml(internalClient) + "</NewInternalClient>" +
+                "<NewEnabled>1</NewEnabled>" +
+                "<NewPortMappingDescription>Maela</NewPortMappingDescription>" +
+                "<NewLeaseDuration>" + lease + "</NewLeaseDuration>";
+            string response;
+            bool added = Soap(controlUrl, serviceType, "AddPortMapping", body, out response);
+            fault = added ? String.Empty : response;
+            return added;
+        }
+
+        // 718 ConflictInMappingEntry, 724 SamePortValuesRequired, 727 ExternalPortOnlySupportsWildcard, 728 NoPortMapsAvailable.
+        private static bool IsPortConflict(string fault)
+        {
+            string code = ExtractSoapValue(fault, "errorCode");
+            return code == "718" || code == "724" || code == "727" || code == "728";
+        }
+
+        private void StartRenewing(int seconds)
+        {
+            int ms = seconds * 1000;
+            _renewTimer = new System.Threading.Timer(delegate { Renew(); }, null, ms, ms);
+        }
+
+        private void Renew()
+        {
+            lock (_renewLock)
+            {
+                if (_disposed)
+                    return;
+                try
+                {
+                    if (_natPmpGateway != null)
+                    {
+                        NatPmpRequest(_natPmpGateway, _natPmpInternalPort, _externalPort, NatPmpLeaseSeconds);
+                        return;
+                    }
+                    string ignored;
+                    AddMapping(_controlUrl, _serviceType, _externalPort, _internalPort, _internalClient, _leaseSeconds, out ignored);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         public void Dispose()
         {
-            if (_disposed)
-                return;
-            _disposed = true;
+            lock (_renewLock)
+            {
+                if (_disposed)
+                    return;
+                _disposed = true;
+            }
+            if (_renewTimer != null)
+                _renewTimer.Dispose();
 
             if (_natPmpGateway != null)
             {
@@ -968,6 +1089,88 @@ namespace Maela
             }
         }
 
+        /// <summary>True for addresses nobody on the internet can reach: a router showing one has another router or the provider's NAT in front of it.</summary>
+        internal static bool IsNonPublic(string address)
+        {
+            IPAddress parsed;
+            if (!IPAddress.TryParse(address ?? String.Empty, out parsed) || parsed.AddressFamily != AddressFamily.InterNetwork)
+                return false;
+            byte[] b = parsed.GetAddressBytes();
+            return b[0] == 0 || b[0] == 10 || b[0] == 127 ||
+                (b[0] == 100 && b[1] >= 64 && b[1] <= 127) ||
+                (b[0] == 169 && b[1] == 254) ||
+                (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+                (b[0] == 192 && b[1] == 168);
+        }
+
+        private static string LocalAddressToward(Uri location, string fallback)
+        {
+            try
+            {
+                IPAddress host;
+                if (!IPAddress.TryParse(location.Host, out host))
+                    return fallback;
+                using (Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    socket.Connect(new IPEndPoint(host, 1900)); // Sends nothing; only picks the route.
+                    return ((IPEndPoint)socket.LocalEndPoint).Address.ToString();
+                }
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
+        /// <summary>Asks on the multicast address for one search target at a time, each on its own socket.</summary>
+        private static Uri DiscoverGatewayMulticast()
+        {
+            string[] searchTargets = new string[]
+            {
+                "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+                "urn:schemas-upnp-org:service:WANIPConnection:1",
+                "urn:schemas-upnp-org:service:WANPPPConnection:1"
+            };
+
+            foreach (string target in searchTargets)
+            {
+                Socket socket = null;
+                try
+                {
+                    socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                    socket.ReceiveTimeout = 1400;
+                    socket.Bind(new IPEndPoint(IPAddress.Any, 0));
+
+                    byte[] bytes = Encoding.ASCII.GetBytes(
+                        "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: " + target + "\r\n\r\n");
+                    socket.SendTo(bytes, new IPEndPoint(IPAddress.Parse("239.255.255.250"), 1900));
+
+                    DateTime until = DateTime.UtcNow.AddMilliseconds(1500);
+                    byte[] buffer = new byte[8192];
+                    while (DateTime.UtcNow < until)
+                    {
+                        EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                        int count = socket.ReceiveFrom(buffer, ref remote);
+                        string location = HeaderValue(Encoding.UTF8.GetString(buffer, 0, count), "LOCATION");
+                        Uri parsed;
+                        if (!String.IsNullOrWhiteSpace(location) && Uri.TryCreate(location.Trim(), UriKind.Absolute, out parsed))
+                            return parsed;
+                    }
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    if (socket != null)
+                    {
+                        try { socket.Close(); } catch { }
+                    }
+                }
+            }
+            return null;
+        }
+
         /// <summary>
         /// Finds the router's UPnP description. Asks on the multicast address and also straight
         /// at each default gateway: Windows Firewall lets a gateway's direct reply through even
@@ -983,43 +1186,63 @@ namespace Maela
                 "urn:schemas-upnp-org:device:InternetGatewayDevice:2",
                 "urn:schemas-upnp-org:service:WANIPConnection:2"
             };
-            List<IPEndPoint> targets = new List<IPEndPoint>();
-            targets.Add(new IPEndPoint(IPAddress.Parse("239.255.255.250"), 1900));
+            IPEndPoint multicast = new IPEndPoint(IPAddress.Parse("239.255.255.250"), 1900);
+            List<IPEndPoint> direct = new List<IPEndPoint>();
             foreach (IPAddress gateway in Gateways())
-                targets.Add(new IPEndPoint(gateway, 1900));
+                direct.Add(new IPEndPoint(gateway, 1900));
 
             List<Uri> found = new List<Uri>();
-            Socket socket = null;
+            List<Socket> sockets = new List<Socket>();
             try
             {
-                socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                socket.ReceiveTimeout = 400;
-                socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-                try { socket.IOControl(unchecked((int)0x9800000C), new byte[4], null); } catch { } // Ignore ICMP errors.
+                Socket main = OpenSearchSocket(IPAddress.Any);
+                sockets.Add(main);
+                // Windows sends multicast out of one adapter only, which may be a VPN or virtual
+                // adapter, so ask from every adapter.
+                foreach (IPAddress local in LocalAddresses())
+                {
+                    try
+                    {
+                        Socket socket = OpenSearchSocket(local);
+                        socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, local.GetAddressBytes());
+                        sockets.Add(socket);
+                    }
+                    catch { }
+                }
+
                 for (int round = 0; round < 2; round++)
                 {
                     foreach (string target in searchTargets)
                     {
                         byte[] bytes = Encoding.ASCII.GetBytes(
                             "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: " + target + "\r\n\r\n");
-                        foreach (IPEndPoint to in targets)
+                        foreach (Socket socket in sockets)
                         {
-                            try { socket.SendTo(bytes, to); } catch { }
+                            try { socket.SendTo(bytes, multicast); } catch { }
                         }
+                        foreach (IPEndPoint to in direct)
+                        {
+                            try { main.SendTo(bytes, to); } catch { }
+                        }
+                        Thread.Sleep(20); // Small routers can drop a burst.
                     }
                     DateTime until = DateTime.UtcNow.AddMilliseconds(1300);
                     byte[] buffer = new byte[8192];
                     while (DateTime.UtcNow < until)
                     {
-                        EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
-                        int count;
-                        try { count = socket.ReceiveFrom(buffer, ref remote); }
-                        catch (SocketException) { continue; } // Timeouts and stray errors: keep listening.
-                        string response = Encoding.UTF8.GetString(buffer, 0, count);
-                        string location = HeaderValue(response, "LOCATION");
-                        Uri parsed;
-                        if (!String.IsNullOrWhiteSpace(location) && Uri.TryCreate(location.Trim(), UriKind.Absolute, out parsed) && !found.Contains(parsed))
-                            found.Add(parsed);
+                        List<Socket> ready = new List<Socket>(sockets);
+                        Socket.Select(ready, null, null, 200000);
+                        foreach (Socket socket in ready)
+                        {
+                            EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                            int count;
+                            try { count = socket.ReceiveFrom(buffer, ref remote); }
+                            catch (SocketException) { continue; } // Stray errors: keep listening.
+                            string location = HeaderValue(Encoding.UTF8.GetString(buffer, 0, count), "LOCATION");
+                            Uri parsed;
+                            if (!String.IsNullOrWhiteSpace(location) && Uri.TryCreate(location.Trim(), UriKind.Absolute, out parsed) && !found.Contains(parsed))
+                                found.Add(parsed);
+                        }
                     }
                     if (found.Count > 0)
                         break;
@@ -1030,12 +1253,39 @@ namespace Maela
             }
             finally
             {
-                if (socket != null)
+                foreach (Socket socket in sockets)
                 {
                     try { socket.Close(); } catch { }
                 }
             }
             return found;
+        }
+
+        private static Socket OpenSearchSocket(IPAddress local)
+        {
+            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.Bind(new IPEndPoint(local, 0));
+            try { socket.IOControl(unchecked((int)0x9800000C), new byte[4], null); } catch { } // Ignore ICMP errors.
+            return socket;
+        }
+
+        private static List<IPAddress> LocalAddresses()
+        {
+            List<IPAddress> list = new List<IPAddress>();
+            try
+            {
+                foreach (System.Net.NetworkInformation.NetworkInterface nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up ||
+                        nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                        continue;
+                    foreach (System.Net.NetworkInformation.UnicastIPAddressInformation a in nic.GetIPProperties().UnicastAddresses)
+                        if (a.Address.AddressFamily == AddressFamily.InterNetwork && !list.Contains(a.Address))
+                            list.Add(a.Address);
+                }
+            }
+            catch { }
+            return list;
         }
 
         private static List<IPAddress> Gateways()
@@ -1063,12 +1313,13 @@ namespace Maela
             {
                 try
                 {
-                    int external = NatPmpRequest(gateway, port, port, 7200);
+                    int external = NatPmpRequest(gateway, port, port, NatPmpLeaseSeconds);
                     if (external <= 0)
                         continue;
                     UpnpPortMapping mapping = new UpnpPortMapping(null, null, external, NatPmpExternalIp(gateway));
                     mapping._natPmpGateway = gateway;
                     mapping._natPmpInternalPort = port;
+                    mapping.StartRenewing(NatPmpLeaseSeconds / 2); // These mappings expire.
                     return mapping;
                 }
                 catch { }
@@ -1123,22 +1374,27 @@ namespace Maela
             return null;
         }
 
-        private static bool FindWanService(Uri location, out string serviceType, out Uri controlUrl)
+        /// <summary>The router's WAN services, connected ones first: many list an unused PPP service ahead of the live one.</summary>
+        private static List<KeyValuePair<string, Uri>> FindWanServices(Uri location)
         {
-            serviceType = null;
-            controlUrl = null;
+            List<KeyValuePair<string, Uri>> connected = new List<KeyValuePair<string, Uri>>();
+            List<KeyValuePair<string, Uri>> others = new List<KeyValuePair<string, Uri>>();
 
             try
             {
                 ServicePointManager.SecurityProtocol = ServicePointManager.SecurityProtocol | (SecurityProtocolType)3072;
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(location);
+                request.Proxy = null; // The router is local; a system proxy can't reach it.
+                request.UserAgent = "Maela/3";
+                request.Timeout = 4000;
+                request.ReadWriteTimeout = 4000;
                 string xml;
-                using (WebClient wc = new WebClient())
-                {
-                    wc.Headers[HttpRequestHeader.UserAgent] = "Maela/3";
-                    xml = wc.DownloadString(location);
-                }
+                using (WebResponse webResponse = request.GetResponse())
+                using (StreamReader reader = new StreamReader(webResponse.GetResponseStream()))
+                    xml = reader.ReadToEnd();
 
                 XmlDocument doc = new XmlDocument();
+                doc.XmlResolver = null;
                 doc.LoadXml(xml);
                 XmlNodeList services = doc.GetElementsByTagName("service");
                 int i;
@@ -1155,16 +1411,21 @@ namespace Maela
                     if (String.IsNullOrWhiteSpace(path))
                         continue;
 
-                    serviceType = type.Trim();
-                    controlUrl = new Uri(location, path.Trim());
-                    return true;
+                    KeyValuePair<string, Uri> service = new KeyValuePair<string, Uri>(type.Trim(), new Uri(location, path.Trim()));
+                    string status;
+                    if (Soap(service.Value, service.Key, "GetStatusInfo", String.Empty, out status) &&
+                        String.Equals(ExtractSoapValue(status, "NewConnectionStatus"), "Connected", StringComparison.OrdinalIgnoreCase))
+                        connected.Add(service);
+                    else
+                        others.Add(service);
                 }
             }
             catch
             {
             }
 
-            return false;
+            connected.AddRange(others);
+            return connected;
         }
 
         private static string ChildText(XmlNode parent, string localName)
@@ -1196,8 +1457,11 @@ namespace Maela
                 request.ContentType = "text/xml; charset=\"utf-8\"";
                 request.Headers["SOAPAction"] = "\"" + serviceType + "#" + action + "\"";
                 request.ContentLength = payload.Length;
-                request.Timeout = 2500;
-                request.ReadWriteTimeout = 2500;
+                request.Proxy = null;
+                request.KeepAlive = false;
+                request.ServicePoint.Expect100Continue = false; // Some routers hang waiting on this.
+                request.Timeout = 4000;
+                request.ReadWriteTimeout = 4000;
 
                 using (Stream stream = request.GetRequestStream())
                     stream.Write(payload, 0, payload.Length);
@@ -1208,8 +1472,24 @@ namespace Maela
 
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                // A refusal arrives as an HTTP error whose body says why; no body means no answer.
+                WebException web = ex as WebException;
+                if (web != null && web.Response != null)
+                {
+                    try
+                    {
+                        using (StreamReader reader = new StreamReader(web.Response.GetResponseStream()))
+                            response = reader.ReadToEnd();
+                        if (response.Length == 0)
+                            response = "refused";
+                    }
+                    catch
+                    {
+                        response = "refused";
+                    }
+                }
                 if (request != null)
                 {
                     try { request.Abort(); } catch { }
@@ -2066,6 +2346,7 @@ namespace Maela
         private void StartThreadsAndCapture()
         {
             _running = true;
+            StartScheduler();
 
             _receiveThread = new Thread(ReceiveLoop);
             _receiveThread.IsBackground = true;
@@ -3358,6 +3639,7 @@ namespace Maela
                 }
             }
 
+            StopScheduler();
             _running = false;
             _connected = false;
 
@@ -3463,11 +3745,13 @@ namespace Maela
         private int _outstandingFrames;
         private volatile float _gain = 1.0f;
         private readonly FarEndReference _reference;
+        private readonly bool _stereo;
         private long _renderPosition;
 
         public PlaybackStream(WAVEFORMATEX format, uint outputDeviceId, FarEndReference reference)
         {
             _reference = reference;
+            _stereo = format.nChannels == 2;
             _waveOutProc = WaveOutCallback;
             int result = NativeMethods.waveOutOpen(out _waveOut, outputDeviceId, ref format, _waveOutProc, IntPtr.Zero, NativeMethods.CALLBACK_FUNCTION);
             if (result != NativeMethods.MMSYSERR_NOERROR)
@@ -3575,8 +3859,9 @@ namespace Maela
                     long now = _reference.CaptureClock;
                     if (_outstandingFrames == 0 || _renderPosition < now)
                         _renderPosition = now;
-                    _reference.Write(_renderPosition, played);
-                    _renderPosition += played.Length / 2;
+                    byte[] heard = _stereo ? DownmixToMono(played) : played; // The reference is mono.
+                    _reference.Write(_renderPosition, heard);
+                    _renderPosition += heard.Length / 2;
                 }
                 _buffers[buffer.Header] = buffer;
                 _outstandingFrames++;
@@ -3585,6 +3870,18 @@ namespace Maela
             result = NativeMethods.waveOutWrite(_waveOut, buffer.Header, (uint)headerSize);
             if (result != NativeMethods.MMSYSERR_NOERROR)
                 CleanupBuffer(buffer.Header);
+        }
+
+        private static byte[] DownmixToMono(byte[] stereo)
+        {
+            byte[] mono = new byte[stereo.Length / 2];
+            for (int i = 0; i + 3 < stereo.Length; i += 4)
+            {
+                int mixed = ((short)(stereo[i] | (stereo[i + 1] << 8)) + (short)(stereo[i + 2] | (stereo[i + 3] << 8))) / 2;
+                mono[i / 2] = (byte)mixed;
+                mono[i / 2 + 1] = (byte)(mixed >> 8);
+            }
+            return mono;
         }
 
         private void WaveOutCallback(IntPtr hwo, uint message, IntPtr instance, IntPtr headerPtr, IntPtr reserved)

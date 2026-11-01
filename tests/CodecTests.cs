@@ -171,6 +171,11 @@ namespace Maela.Tests
                 Check(true, "damaged video doesn't crash the decoder");
             }
 
+            BitrateInPlace(w, h);
+            GraphicsCard(1280, 720, 6000);
+            GraphicsCard(1920, 1080, 13500); // The same bits per pixel.
+            GpuViewing(1920, 1080);
+            CompareQuality(1920, 1080);
             EndToEnd(w, h);
             Sandbox();
             CaptureProbe();
@@ -187,6 +192,287 @@ namespace Maela.Tests
                 Console.WriteLine("     1080p encode incl. painting: " + (sw.Elapsed.TotalMilliseconds / 30).ToString("F1") + " ms per frame on this CI machine");
             }
             return Finish();
+        }
+
+        // How many bytes `frames` frames of moving picture come to.
+        static long Measure(IVideoEncoder encoder, byte[] src, int w, int h, int from, int frames)
+        {
+            long bytes = 0;
+            for (int t = from; t < from + frames; t++)
+            {
+                Paint(src, w, h, t % 100);
+                bool key;
+                byte[] au = encoder.Encode(ToI420(src, w, h), t * 16, out key);
+                if (au != null) bytes += au.Length;
+            }
+            return bytes;
+        }
+
+        static void BitrateInPlace(int w, int h)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Changing quality without restarting the encoder (OpenH264)");
+            byte[] src = new byte[w * h * 4];
+            using (H264Encoder encoder = new H264Encoder(w, h, 60, 8000))
+            {
+                Measure(encoder, src, w, h, 0, 30);
+                long high = Measure(encoder, src, w, h, 30, 60);
+                Check(encoder.SetBitrate(1000), "the encoder accepts a new bitrate");
+                Measure(encoder, src, w, h, 90, 30);
+                long low = Measure(encoder, src, w, h, 120, 60);
+                Check(low < high * 0.6, "and uses it (" + high + " bytes at 8 Mbps, " + low + " at 1 Mbps)");
+            }
+        }
+
+        // The real encoder on this PC's graphics card, checked with the decoder viewers use.
+        static void GraphicsCard(int w, int h, int kbps)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Graphics card encoding (" + w + "x" + h + ")");
+            MediaFoundationEncoder encoder = MediaFoundationEncoder.TryCreate(w, h, 60, kbps);
+            if (encoder == null)
+            {
+                Console.WriteLine("     SKIPPED: this PC has no hardware H.264 encoder");
+                return;
+            }
+            byte[] src = new byte[w * h * 4];
+            using (encoder)
+            using (H264Decoder decoder = new H264Decoder())
+            {
+                Console.WriteLine("     " + encoder.Name);
+                int frames = 0, decoded = 0, keyframes = 0, forcedHit = 0;
+                double worst = 99;
+                Stopwatch sw = new Stopwatch();
+                for (int t = 0; t < 180; t++)
+                {
+                    Paint(src, w, h, t % 100);
+                    I420Frame input = ToI420(src, w, h);
+                    if (t == 90) encoder.ForceKeyframe();
+                    bool key;
+                    sw.Start();
+                    byte[] au = encoder.Encode(input, t * 16, out key);
+                    sw.Stop();
+                    if (au == null) continue;
+                    frames++;
+                    if (key)
+                    {
+                        keyframes++;
+                        if (t >= 90 && t <= 95) forcedHit++;
+                    }
+                    I420Frame back = decoder.Decode(au);
+                    if (back == null) continue;
+                    decoded++;
+                    // Output can trail input by a frame or two: compare only once the picture has settled.
+                    if (t % 100 >= 30 && t % 20 == 5)
+                    {
+                        Paint(src, w, h, t % 100);
+                        worst = Math.Min(worst, Math.Max(Psnr(src, ToBgra(back)), Math.Max(PsnrAt(w, h, t - 1, back), PsnrAt(w, h, t - 2, back))));
+                    }
+                }
+                Console.WriteLine("     " + (sw.Elapsed.TotalMilliseconds / 180).ToString("F1") + " ms per frame on the graphics card");
+                Check(frames >= 170, "the graphics card encodes (" + frames + " of 180 frames)");
+                Check(decoded >= frames - 3, "viewers' decoder can read it (" + decoded + " of " + frames + ")");
+                Check(worst > 26, "picture quality is good (" + worst.ToString("F1") + " dB at worst)");
+                Check(forcedHit >= 1, "keyframes on request (" + keyframes + " in all)");
+
+                Check(encoder.SetBitrate(1000), "the bitrate can change in place");
+                Measure(encoder, src, w, h, 0, 30);
+                long low = Measure(encoder, src, w, h, 30, 60);
+                encoder.SetBitrate(12000);
+                Measure(encoder, src, w, h, 90, 30);
+                long high = Measure(encoder, src, w, h, 120, 60);
+                Check(low < high * 0.6, "and takes effect (" + low + " bytes at 1 Mbps, " + high + " at 12 Mbps)");
+            }
+        }
+
+        // The viewer's graphics-card path: real decoder and renderer, compared against OpenH264 and the GDI colours.
+        static void GpuViewing(int w, int h)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Watching on the graphics card (" + w + "x" + h + ")");
+            byte[] src = new byte[w * h * 4];
+            System.Windows.Forms.Form form = new System.Windows.Forms.Form();
+            form.ClientSize = new System.Drawing.Size(w, h);
+            form.ShowInTaskbar = false;
+            form.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+            form.Location = new System.Drawing.Point(-20000, -20000);
+            form.Show();
+            GpuVideoRenderer renderer = GpuVideoRenderer.TryCreate(form.Handle, w, h);
+            if (renderer == null)
+            {
+                Console.WriteLine("     SKIPPED: this PC can't draw with Direct3D");
+                form.Dispose();
+                return;
+            }
+            GpuH264Decoder decoder = null;
+            renderer.HoldForTests = true;
+            try
+            {
+                using (renderer)
+                using (H264Encoder encoder = new H264Encoder(w, h, 60, 20000))
+                using (H264Decoder soft = new H264Decoder())
+                {
+                    int width = 0, height = 0, outFrames = 0, onCard = 0;
+                    double worstHard = 99, worstSoft = 99, worstBetween = 99, hardMs = 0, softDecodeMs = 0;
+                    byte[] softDrawn = null;
+                    Stopwatch sw = new Stopwatch();
+                    try { decoder = new GpuH264Decoder(renderer.Device); }
+                    catch (Exception ex) { Console.WriteLine("     No graphics-card decoder: " + ex.Message); }
+                    System.Collections.Generic.List<ViewerFrame> frames = new System.Collections.Generic.List<ViewerFrame>();
+                    encoder.ForceKeyframe();
+                    for (int t = 0; t < 100; t++)
+                    {
+                        Paint(src, w, h, t);
+                        bool key;
+                        byte[] au = encoder.Encode(ToI420(src, w, h), t * 16, out key);
+                        if (au == null) continue;
+
+                        sw.Restart();
+                        I420Frame picture = soft.Decode(au);
+                        softDecodeMs += sw.Elapsed.TotalMilliseconds;
+                        if (picture != null)
+                        {
+                            ViewerFrame software = new ViewerFrame();
+                            software.Software = picture;
+                            software.Width = picture.Width;
+                            software.Height = picture.Height;
+                            renderer.Render(software);
+                            if (t % 20 == 5)
+                            {
+                                int rw, rh;
+                                byte[] drawn = renderer.ReadBackForTests(out rw, out rh);
+                                byte[] old = ToBgra(picture);
+                                worstSoft = Math.Min(worstSoft, LumaPsnr(old, drawn));
+                                softDrawn = drawn;
+                                if (t == 25)
+                                {
+                                    int at = (h / 2 * w + w / 2) * 4;
+                                    Console.WriteLine("     centre pixel: GDI path " + old[at] + "," + old[at + 1] + "," + old[at + 2] + "; graphics card " + drawn[at] + "," + drawn[at + 1] + "," + drawn[at + 2]);
+                                }
+                            }
+                        }
+
+                        if (decoder == null) continue;
+                        byte[] clean;
+                        Check0(H264StreamCheck.Check(au, ref width, ref height, out clean), "stream check");
+                        frames.Clear();
+                        sw.Restart();
+                        decoder.Decode(clean, width, height, frames);
+                        hardMs += sw.Elapsed.TotalMilliseconds;
+                        foreach (ViewerFrame f in frames)
+                        {
+                            outFrames++;
+                            if (f.Texture != IntPtr.Zero) onCard++;
+                            renderer.Render(f);
+                            if (t % 20 == 5)
+                            {
+                                int rw, rh;
+                                byte[] drawn = renderer.ReadBackForTests(out rw, out rh);
+                                worstHard = Math.Min(worstHard, Psnr(src, drawn));
+                                if (softDrawn != null)
+                                    worstBetween = Math.Min(worstBetween, Psnr(softDrawn, drawn));
+                            }
+                            f.Dispose();
+                        }
+                    }
+                    Check(worstSoft > 40, "drawn with the graphics card, brightness matches the old GDI drawing (" + worstSoft.ToString("F1") + " dB)");
+                    if (decoder != null)
+                    {
+                        Console.WriteLine("     decode: " + (hardMs / 100).ToString("F1") + " ms on the graphics card, " + (softDecodeMs / 100).ToString("F1") + " ms with OpenH264");
+                        Check(outFrames >= 95 && onCard == outFrames, "the graphics card decodes it (" + outFrames + " of 100, " + onCard + " on the card)");
+                        Check(worstBetween > 45, "and the picture is the same as OpenH264's (" + worstBetween.ToString("F1") + " dB)");
+                        Console.WriteLine("     against the original screen: " + worstHard.ToString("F1") + " dB on this harsh pattern");
+                    }
+                }
+            }
+            finally
+            {
+                if (decoder != null) decoder.Dispose();
+                form.Dispose();
+            }
+        }
+
+        static double LumaPsnr(byte[] a, byte[] b)
+        {
+            double sum = 0;
+            long count = 0;
+            for (int i = 0; i + 3 < a.Length; i += 4)
+            {
+                double ya = 0.0722 * a[i] + 0.7152 * a[i + 1] + 0.2126 * a[i + 2];
+                double yb = 0.0722 * b[i] + 0.7152 * b[i + 1] + 0.2126 * b[i + 2];
+                sum += (ya - yb) * (ya - yb);
+                count++;
+            }
+            double mse = sum / Math.Max(1, count);
+            return mse <= 0 ? 99 : 10 * Math.Log10(255.0 * 255.0 / mse);
+        }
+
+        static void Check0(bool ok, string name)
+        {
+            if (!ok) Check(false, name);
+        }
+
+        // Average and worst match against the picture, allowing for output trailing input by up to 2 frames.
+        static void Quality(IVideoEncoder encoder, int w, int h, out double average, out double worst, out long bytes)
+        {
+            byte[] src = new byte[w * h * 4];
+            double sum = 0;
+            int count = 0;
+            worst = 99;
+            bytes = 0;
+            using (H264Decoder decoder = new H264Decoder())
+            {
+                for (int t = 0; t < 95; t++)
+                {
+                    Paint(src, w, h, t);
+                    bool key;
+                    byte[] au = encoder.Encode(ToI420(src, w, h), t * 16, out key);
+                    if (au == null) continue;
+                    if (t >= 30) bytes += au.Length;
+                    I420Frame back = decoder.Decode(au);
+                    if (back == null || t < 30 || t % 5 != 0) continue;
+                    double psnr = Math.Max(PsnrAt(w, h, t, back), Math.Max(PsnrAt(w, h, t - 1, back), PsnrAt(w, h, t - 2, back)));
+                    sum += psnr;
+                    count++;
+                    worst = Math.Min(worst, psnr);
+                }
+            }
+            average = count == 0 ? 0 : sum / count;
+        }
+
+        static void CompareQuality(int w, int h)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Quality on the test pattern at " + w + "x" + h + " (average / worst dB, Mbps produced)");
+            foreach (int kbps in new int[] { 3000, 6000, 12000, 25000 })
+            {
+                double average, worst;
+                long bytes;
+                double softAverage;
+                using (H264Encoder soft = new H264Encoder(w, h, 60, kbps))
+                {
+                    Quality(soft, w, h, out average, out worst, out bytes);
+                    Console.WriteLine("     OpenH264 at " + kbps + " kbps: " + average.ToString("F1") + " / " + worst.ToString("F1") + " dB, " + (bytes * 8.0 * 60 / 65 / 1000000).ToString("F1") + " Mbps");
+                    softAverage = average;
+                }
+                MediaFoundationEncoder hard = MediaFoundationEncoder.TryCreate(w, h, 60, kbps);
+                if (hard == null)
+                    continue;
+                using (hard)
+                {
+                    Quality(hard, w, h, out average, out worst, out bytes);
+                    Console.WriteLine("     " + hard.Name + " at " + kbps + " kbps: " + average.ToString("F1") + " / " + worst.ToString("F1") + " dB, " + (bytes * 8.0 * 60 / 65 / 1000000).ToString("F1") + " Mbps");
+                    if (kbps >= 6000)
+                        Check(average > softAverage - 1.0, "the graphics card looks as good as the processor at " + kbps + " kbps");
+                }
+            }
+        }
+
+        static double PsnrAt(int w, int h, int t, I420Frame back)
+        {
+            byte[] earlier = new byte[w * h * 4];
+            Paint(earlier, w, h, Math.Max(0, t) % 100);
+            return Psnr(earlier, ToBgra(back));
         }
 
         // Real video through a real room: encode, send, receive, decode, compare.
@@ -210,7 +496,10 @@ namespace Maela.Tests
                 H264Decoder decoder = new H264Decoder();
                 int decoded = 0;
                 double worst = 99;
-                byte[] lastSent = null;
+                int mostBehind = 0;
+                // Sending is paced, so a frame can arrive just after the next was made: compare with
+                // the closest recent frame. A damaged picture matches none of them.
+                System.Collections.Generic.List<byte[]> recent = new System.Collections.Generic.List<byte[]>();
                 object gate = new object();
                 viewer.VideoFrameReceived = delegate(uint from, byte[] f, bool k)
                 {
@@ -219,7 +508,17 @@ namespace Maela.Tests
                     lock (gate)
                     {
                         decoded++;
-                        if (lastSent != null) worst = Math.Min(worst, Psnr(lastSent, ToBgra(pic)));
+                        if (recent.Count == 0) return;
+                        byte[] seen = ToBgra(pic);
+                        double best = -1;
+                        int behind = 0;
+                        for (int i = recent.Count - 1; i >= 0; i--)
+                        {
+                            double psnr = Psnr(recent[i], seen);
+                            if (psnr > best) { best = psnr; behind = recent.Count - 1 - i; }
+                        }
+                        worst = Math.Min(worst, best);
+                        mostBehind = Math.Max(mostBehind, behind);
                     }
                 };
                 viewer.WatchStream(host.LocalMemberId);
@@ -235,7 +534,11 @@ namespace Maela.Tests
                         bool key;
                         byte[] au = encoder.Encode(ToI420(src, w, h), t * 16, out key);
                         if (au == null) continue;
-                        lock (gate) lastSent = (byte[])src.Clone();
+                        lock (gate)
+                        {
+                            recent.Add((byte[])src.Clone());
+                            if (recent.Count > 8) recent.RemoveAt(0);
+                        }
                         host.SendVideoFrame(au, key);
                         System.Threading.Thread.Sleep(16);
                     }
@@ -245,6 +548,7 @@ namespace Maela.Tests
                 {
                     Check(decoded >= 80, "the viewer decodes the stream (" + decoded + " of 90 frames)");
                     Check(worst > 26, "what the viewer sees matches the screen (" + worst.ToString("F1") + " dB at worst)");
+                    Check(mostBehind <= 4, "the viewer stays close behind the screen (at most " + mostBehind + " frames)");
                 }
                 decoder.Dispose();
             }

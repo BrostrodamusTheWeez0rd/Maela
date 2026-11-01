@@ -941,7 +941,8 @@ namespace Maela
                 string status;
                 try
                 {
-                    mapping = UpnpPortMapping.TryCreate(localPort, localIp);
+                    string failure;
+                    mapping = UpnpPortMapping.TryCreate(localPort, localIp, out failure);
                     if (mapping != null)
                     {
                         publicIp = mapping.ExternalIp;
@@ -949,9 +950,15 @@ namespace Maela
                             status = "Port opened on your router automatically";
                         else
                             status = "Port opened on your router automatically (router chose port " + mapping.ExternalPort + ")";
+                        if (UpnpPortMapping.IsNonPublic(publicIp))
+                        {
+                            // A private address in the room code could never work from outside.
+                            publicIp = String.Empty;
+                            status = "Port opened on your router, but another router or your internet provider sits in front of it, so friends may not reach you. Port forwarding on that device or a VPN like Tailscale can help";
+                        }
                     }
                     else
-                        status = "Your router didn't open the port. Try Settings > Allow through Firewall, or turn on UPnP/NAT-PMP on your router";
+                        status = "Your router didn't open the port (" + failure + "). Try Settings > Allow through Firewall, or turn on UPnP/NAT-PMP on your router";
                 }
                 catch
                 {
