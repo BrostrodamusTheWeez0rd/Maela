@@ -386,6 +386,7 @@ namespace Maela
         public readonly FlatButton NoiseButton = new FlatButton();
         public readonly FlatButton LeaveButton = new FlatButton();
         public readonly FlatButton DisconnectButton = new FlatButton();
+        public readonly FlatButton ScreenButton = new FlatButton();
         private bool _inVoice;
         private string _status = String.Empty;
         private string _detail = String.Empty;
@@ -410,7 +411,13 @@ namespace Maela
             DisconnectButton.IconSize = 18;
             DisconnectButton.Text = String.Empty;
             DisconnectButton.Size = new Size(36, 32);
+            ScreenButton.Look = ButtonLook.Secondary;
+            ScreenButton.Icon = IconKind.Screen;
+            ScreenButton.IconSize = 18;
+            ScreenButton.Text = String.Empty;
+            ScreenButton.Size = new Size(36, 32);
             Controls.Add(NoiseButton);
+            Controls.Add(ScreenButton);
             Controls.Add(LeaveButton);
             Controls.Add(DisconnectButton);
         }
@@ -422,6 +429,7 @@ namespace Maela
                 _inVoice = inVoice;
                 LeaveButton.Visible = inVoice;
                 NoiseButton.Visible = inVoice;
+                ScreenButton.Visible = inVoice;
                 PerformLayout();
                 Invalidate();
             }
@@ -451,6 +459,8 @@ namespace Maela
             if (_inVoice)
             {
                 LeaveButton.SetBounds(right - 36, 52, 36, 32);
+                right -= 36 + 6;
+                ScreenButton.SetBounds(right - 36, 52, 36, 32);
                 right -= 36 + 8;
             }
             NoiseButton.SetBounds(12, 52, Math.Max(40, right - 12), 32);
@@ -465,6 +475,7 @@ namespace Maela
             NoiseButton.Underlay = t.Surface;
             LeaveButton.Underlay = t.Surface;
             DisconnectButton.Underlay = t.Surface;
+            ScreenButton.Underlay = t.Surface;
 
             Color signal = !_connected ? t.Muted : (_ping < 0 || _ping < 90 ? t.Good : (_ping < 180 ? Color.FromArgb(240, 178, 50) : t.Danger));
             Icons.Draw(g, IconKind.Signal, new RectangleF(12, 13, 18, 18), signal);

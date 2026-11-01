@@ -21,8 +21,9 @@ namespace Maela
         private const string BaseUrl = "http://ciscobinary.openh264.org/";
 
         // Pinned hashes (lower-case hex) of Cisco's files for this version.
-        internal static string Win64Bz2Sha256 = "";
-        internal static string Win64DllSha256 = "";
+        internal static string Win64Bz2Sha256 = "c0df66e90d46c688558d5697c845886839c918b8253b86425bcde6be0d871f13";
+        internal static string Win64DllSha256 = "081b0c081480d177cbfddfbc90b1613640e702f875897b30d8de195cde73dd34"; // 974,944 bytes
+        // Screen sharing needs 64-bit Windows; 32-bit hashes aren't pinned.
         internal static string Win32Bz2Sha256 = "";
         internal static string Win32DllSha256 = "";
 
@@ -54,6 +55,8 @@ namespace Maela
         /// <summary>Downloads, checks and installs the DLL. Throws with a readable message on failure.</summary>
         public static void Install()
         {
+            if (!Is64)
+                throw new InvalidOperationException("Screen sharing needs 64-bit Windows.");
             if (Bz2Hash.Length != 64 || DllHash.Length != 64)
                 throw new InvalidOperationException("This version of mæla doesn't know the expected OpenH264 checksums.");
             byte[] compressed;

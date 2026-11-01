@@ -344,6 +344,22 @@ namespace Maela
                 SendPacket(_hostEndpoint, PacketStreamWatchStop, _localId, 0, BitConverter.GetBytes(sharerId));
         }
 
+        /// <summary>Viewer: ask the sharer for a fresh keyframe (e.g. after the viewer fell behind).</summary>
+        public void RequestStreamKeyframe(uint sharerId)
+        {
+            StreamLink link = null;
+            lock (_stateLock)
+            {
+                foreach (StreamLink l in _streamLinks.Values)
+                    if (!l.IsSender && l.PeerId == sharerId) { link = l; break; }
+            }
+            if (link != null)
+            {
+                link.LastKeyframeRequestUtc = DateTime.MinValue;
+                RequestKeyframe(link);
+            }
+        }
+
         public StreamWatchState GetWatchState(uint sharerId)
         {
             lock (_stateLock)

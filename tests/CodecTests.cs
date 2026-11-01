@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace Maela.Tests
 {
@@ -170,6 +171,10 @@ namespace Maela.Tests
                 Check(true, "damaged video doesn't crash the decoder");
             }
 
+            EndToEnd(w, h);
+            Sandbox();
+            CaptureProbe();
+
             using (H264Encoder hd = new H264Encoder(1920, 1080, 60, 8000))
             {
                 byte[] frame = new byte[1920 * 1080 * 4];
@@ -182,6 +187,126 @@ namespace Maela.Tests
                 Console.WriteLine("     1080p encode incl. painting: " + (sw.Elapsed.TotalMilliseconds / 30).ToString("F1") + " ms per frame on this CI machine");
             }
             return Finish();
+        }
+
+        // Real video through a real room: encode, send, receive, decode, compare.
+        static void EndToEnd(int w, int h)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Screen share end to end (encode, send through a room, decode)");
+            VoipEngine host = new VoipEngine();
+            host.HeadlessForTests = true;
+            host.StartHost(0, "Host", "Test", new System.Collections.Generic.List<string>(new string[] { "General" }), VoipEngineTestKeys.HostPrivateKey, null);
+            VoipEngine viewer = new VoipEngine();
+            viewer.HeadlessForTests = true;
+            viewer.StartClient(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, host.BoundPort), "Viewer", VoipEngineTestKeys.HostFingerprint, null);
+            try
+            {
+                DateTime until = DateTime.UtcNow.AddSeconds(8);
+                while (!viewer.IsInVoice && DateTime.UtcNow < until) System.Threading.Thread.Sleep(20);
+                host.StartScreenShare(w, h, 60);
+                until = DateTime.UtcNow.AddSeconds(5);
+                while (viewer.GetLiveStream(host.LocalMemberId) == null && DateTime.UtcNow < until) System.Threading.Thread.Sleep(20);
+                H264Decoder decoder = new H264Decoder();
+                int decoded = 0;
+                double worst = 99;
+                byte[] lastSent = null;
+                object gate = new object();
+                viewer.VideoFrameReceived = delegate(uint from, byte[] f, bool k)
+                {
+                    I420Frame pic = decoder.Decode(f);
+                    if (pic == null) return;
+                    lock (gate)
+                    {
+                        decoded++;
+                        if (lastSent != null) worst = Math.Min(worst, Psnr(lastSent, ToBgra(pic)));
+                    }
+                };
+                viewer.WatchStream(host.LocalMemberId);
+                until = DateTime.UtcNow.AddSeconds(5);
+                while (host.StreamViewerCount == 0 && DateTime.UtcNow < until) System.Threading.Thread.Sleep(20);
+                using (H264Encoder encoder = new H264Encoder(w, h, 60, 6000))
+                {
+                    byte[] src = new byte[w * h * 4];
+                    for (int t = 0; t < 90; t++)
+                    {
+                        Paint(src, w, h, t % 100);
+                        if (host.ConsumeKeyframeRequest()) encoder.ForceKeyframe();
+                        bool key;
+                        byte[] au = encoder.Encode(ToI420(src, w, h), t * 16, out key);
+                        if (au == null) continue;
+                        lock (gate) lastSent = (byte[])src.Clone();
+                        host.SendVideoFrame(au, key);
+                        System.Threading.Thread.Sleep(16);
+                    }
+                }
+                System.Threading.Thread.Sleep(500);
+                lock (gate)
+                {
+                    Check(decoded >= 80, "the viewer decodes the stream (" + decoded + " of 90 frames)");
+                    Check(worst > 28, "what the viewer sees matches the screen (" + worst.ToString("F1") + " dB at worst)");
+                }
+                decoder.Dispose();
+            }
+            finally
+            {
+                viewer.Dispose();
+                host.Dispose();
+            }
+        }
+
+        // The viewer runs at Low integrity in a locked-down job: prove Windows enforces it.
+        static void Sandbox()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Viewer sandbox");
+            string low = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData\\LocalLow");
+            string report = Path.Combine(low, "maela-sandbox-test.txt");
+            string blocked = Path.Combine(Path.GetTempPath(), "maela-sandbox-should-not-exist.txt");
+            try { File.Delete(report); } catch { }
+            try { File.Delete(blocked); } catch { }
+            string cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            IntPtr job;
+            bool lowIntegrity;
+            try
+            {
+                Process p = SandboxLauncher.Start(cmd, "cmd.exe /c whoami /groups > \"" + report + "\" & echo x > \"" + blocked + "\"", out job, out lowIntegrity);
+                p.WaitForExit(15000);
+                string groups = File.Exists(report) ? File.ReadAllText(report) : String.Empty;
+                Check(lowIntegrity && groups.IndexOf("Low Mandatory Level", StringComparison.OrdinalIgnoreCase) >= 0, "the viewer process runs at Low integrity");
+                Check(!File.Exists(blocked), "it can't write to your normal folders");
+                SandboxLauncher.CloseHandle(job);
+            }
+            catch (Exception ex)
+            {
+                Check(false, "sandboxed process starts (" + ex.Message + ")");
+            }
+            try { File.Delete(report); } catch { }
+            try { File.Delete(blocked); } catch { }
+        }
+
+        // Information only: build servers usually have no real display to duplicate.
+        static void CaptureProbe()
+        {
+            Console.WriteLine();
+            Console.WriteLine("Screen capture on this machine (information only)");
+            foreach (CaptureSource s in CaptureSource.Monitors())
+            {
+                try
+                {
+                    using (IScreenCapture c = ScreenCaptureFactory.Create(s))
+                    {
+                        bool got = false;
+                        for (int i = 0; i < 20 && !got; i++)
+                            got = c.Capture(50, true, delegate(IntPtr bits, int stride) { });
+                        Console.WriteLine("     " + s.Name + ": " + c.Method + ", " + c.Width + "x" + c.Height + (got ? ", frame captured" : ", no frame (no active display)"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("     " + s.Name + ": " + ex.Message);
+                }
+            }
         }
 
         static int Finish()

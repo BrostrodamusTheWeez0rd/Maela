@@ -7,7 +7,7 @@ namespace Maela
     internal enum IconKind
     {
         None, Mic, MicOff, Headphones, HeadphonesOff, Gear, Plus, Send, Smile, Copy, Leave, Lock,
-        Search, Speaker, Close, Hash, Check, Waves, WavesOff, Signal, Download, Palette, Crown, Disconnect
+        Search, Speaker, Close, Hash, Check, Waves, WavesOff, Signal, Download, Palette, Crown, Disconnect, Screen
     }
 
     /// <summary>
@@ -85,6 +85,12 @@ namespace Maela
                     case IconKind.Copy:
                         DrawRound(g, pen, 8, 8, 12, 12, 3);
                         g.DrawLines(pen, new PointF[] { new PointF(16, 8), new PointF(16, 6), new PointF(14, 4), new PointF(6, 4), new PointF(4, 6), new PointF(4, 14), new PointF(6, 16), new PointF(8, 16) });
+                        break;
+                    case IconKind.Screen:
+                        // A monitor on a stand.
+                        g.DrawRectangle(pen, 3, 4, 18, 12);
+                        g.DrawLine(pen, 12, 16, 12, 20);
+                        g.DrawLine(pen, 8, 20, 16, 20);
                         break;
                     case IconKind.Disconnect:
                         // An open door with an arrow leaving it.

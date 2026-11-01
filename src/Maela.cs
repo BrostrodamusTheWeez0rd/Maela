@@ -30,6 +30,13 @@ namespace Maela
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            // A locked-down stream viewer (see StreamViewerHost): just show the stream.
+            if (args != null && args.Length >= 3 && args[0] == "--watch")
+            {
+                StreamViewerForm.RunHelper(args[1], args[2]);
+                return;
+            }
+
             bool justUpdated = false;
             int i;
             for (i = 0; args != null && i < args.Length; i++)
@@ -440,6 +447,10 @@ namespace Maela
         public bool TrayHintShown;
         public string IconRefreshedFor = String.Empty;
         public string Status = String.Empty;
+        public bool AllowDirectStreams = true;
+        public bool StreamNoticeShown;
+        public int ShareHeight = 1080;
+        public int ShareFps = 60;
 
         public AppPreferences Clone()
         {
@@ -461,6 +472,10 @@ namespace Maela
             p.TrayHintShown = TrayHintShown;
             p.IconRefreshedFor = IconRefreshedFor;
             p.Status = Status;
+            p.AllowDirectStreams = AllowDirectStreams;
+            p.StreamNoticeShown = StreamNoticeShown;
+            p.ShareHeight = ShareHeight;
+            p.ShareFps = ShareFps;
             return p;
         }
     }
@@ -549,6 +564,18 @@ namespace Maela
                     {
                         p.TrayHintShown = value == "1";
                     }
+                    else if (key == "directstreams")
+                        p.AllowDirectStreams = value != "0";
+                    else if (key == "streamnotice")
+                        p.StreamNoticeShown = value == "1";
+                    else if (key == "shareheight")
+                    {
+                        int v; if (Int32.TryParse(value, out v) && (v == 720 || v == 1080 || v == 1440 || v == 2160)) p.ShareHeight = v;
+                    }
+                    else if (key == "sharefps")
+                    {
+                        int v; if (Int32.TryParse(value, out v) && (v == 30 || v == 60 || v == 120)) p.ShareFps = v;
+                    }
                     else if (key == "status")
                     {
                         try { p.Status = VoipEngine.CleanStatus(Encoding.UTF8.GetString(Convert.FromBase64String(value))); } catch { }
@@ -590,7 +617,11 @@ namespace Maela
                     "tray=" + (p.CloseToTray ? "1" : "0"),
                     "trayhint=" + (p.TrayHintShown ? "1" : "0"),
                     "iconver=" + (p.IconRefreshedFor ?? String.Empty),
-                    "status=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(p.Status ?? String.Empty))
+                    "status=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(p.Status ?? String.Empty)),
+                    "directstreams=" + (p.AllowDirectStreams ? "1" : "0"),
+                    "streamnotice=" + (p.StreamNoticeShown ? "1" : "0"),
+                    "shareheight=" + p.ShareHeight,
+                    "sharefps=" + p.ShareFps
                 });
             }
             catch { }

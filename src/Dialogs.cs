@@ -381,6 +381,7 @@ namespace Maela
         private readonly ToggleSwitch _agc;
         private readonly ToggleSwitch _autoUpdate;
         private readonly ToggleSwitch _closeToTray;
+        private readonly ToggleSwitch _directStreams;
         private readonly Label _downloadStatus = new Label();
         private readonly FlatButton _repair = new FlatButton();
         private readonly System.Collections.Generic.List<ThemeCard> _themeCards = new System.Collections.Generic.List<ThemeCard>();
@@ -471,6 +472,7 @@ namespace Maela
 
             AddSection("App");
             _closeToTray = AddToggle("Keep running in the tray when closed", "Closing the window keeps you in your room. Right-click the tray icon to quit.", _preferences.CloseToTray);
+            _directStreams = AddToggle("Connect directly for screen sharing", "Best quality. The person sharing or watching sees your IP address. Off: always go through the host.", _preferences.AllowDirectStreams);
 
             AddSection("Updates");
             _autoUpdate = AddToggle("Check for updates automatically", "mæla " + Updater.CurrentVersionText + " · updates come from GitHub releases", _preferences.AutoUpdate);
@@ -585,6 +587,9 @@ namespace Maela
             _preferences.SoundEffects = _sounds.Checked;
             _preferences.AutoGain = _agc.Checked;
             _preferences.CloseToTray = _closeToTray.Checked;
+            if (_preferences.AllowDirectStreams != _directStreams.Checked)
+                _preferences.StreamNoticeShown = true;
+            _preferences.AllowDirectStreams = _directStreams.Checked;
             if (_autoUpdate.Checked && !_preferences.AutoUpdate)
                 _preferences.SkippedVersion = String.Empty;
             _preferences.AutoUpdate = _autoUpdate.Checked;

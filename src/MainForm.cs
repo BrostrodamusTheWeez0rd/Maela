@@ -377,6 +377,11 @@ namespace Maela
             object item = _channels.Items[index];
             VoiceChannelInfo channel = item as VoiceChannelInfo;
             RoomMemberInfo member = item as RoomMemberInfo;
+            if (member != null && !member.IsLocal && _engine.GetLiveStream(member.Id) != null && member.ChannelId == _engine.LocalChannelId)
+            {
+                WatchStream(member); // Double-click someone who's live in your channel to watch.
+                return;
+            }
             int target = channel != null ? channel.Id : (member != null ? member.ChannelId : -1);
             if (target > 0 && target != _engine.LocalChannelId && !_engine.IsTextChannel(target))
                 _engine.ChangeChannel(target); // Double-click a voice channel or a person to join them.
@@ -542,6 +547,14 @@ namespace Maela
             {
                 Icons.Draw(g, IconKind.Crown, new RectangleF(right - 15, bounds.Top + (bounds.Height - 15) / 2f, 15, 15), Color.FromArgb(240, 178, 50));
                 right -= 21;
+            }
+            if (_engine != null && _engine.GetLiveStream(member.Id) != null)
+            {
+                // LIVE badge: double-click (or open their card) to watch.
+                RectangleF pill = new RectangleF(right - 34, bounds.Top + (bounds.Height - 16) / 2f, 32, 16);
+                Ui.FillRound(g, t.Danger, pill, 5);
+                Ui.DrawText(g, "LIVE", Ui.Tiny, Rectangle.Round(pill), Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                right -= 40;
             }
 
             Color nameColor = member.IsSpeaking || member.IsLocal ? t.Text : t.Text2;
@@ -846,6 +859,7 @@ namespace Maela
             _engine.EchoCancellation = _preferences.EchoCancellation;
             _engine.NoiseSuppression = _preferences.NoiseSuppression;
             _engine.AutoGain = _preferences.AutoGain;
+            _engine.AllowDirectStreams = _preferences.AllowDirectStreams;
         }
 
         private void LeaveClicked(object sender, EventArgs e)
@@ -886,6 +900,7 @@ namespace Maela
         private void StopEngine()
         {
             Interlocked.Increment(ref _networkSetupGeneration);
+            StopAllStreams();
             if (_upnpMapping != null)
             {
                 try { _upnpMapping.Dispose(); } catch { }
@@ -1023,6 +1038,10 @@ namespace Maela
             RefreshShell(engine);
             RefreshChat(engine);
             RefreshProfiles(engine);
+            if (engine != null && engine.IsRunning)
+                AttachStreams(engine);
+            RefreshSharing(engine);
+            RefreshViewers(engine);
             RefreshLocalPresence();
             if (!_presenceScanRunning)
                 BeginPresenceScan();

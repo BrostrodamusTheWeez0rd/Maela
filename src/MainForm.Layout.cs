@@ -28,6 +28,7 @@ namespace Maela
         private readonly ActionPanel _actionPanel = new ActionPanel();
         private readonly VoiceCard _voiceCard = new VoiceCard();
         private readonly Panel _cardHost = new Panel();
+        private readonly LiveBar _liveBar = new LiveBar();
         private readonly UserBar _userBar = new UserBar();
         private readonly ChannelHeader _header = new ChannelHeader();
         private readonly HomePanel _home = new HomePanel();
@@ -112,6 +113,8 @@ namespace Maela
             _voiceCard.NoiseButton.Click += delegate { ToggleNoiseSuppression(); };
             _voiceCard.LeaveButton.Click += LeaveClicked;
             _voiceCard.DisconnectButton.Click += DisconnectClicked;
+            _voiceCard.ScreenButton.Click += ShareScreenClicked;
+            _toolTip.SetToolTip(_voiceCard.ScreenButton, "Share your screen");
             _toolTip.SetToolTip(_voiceCard.LeaveButton, "Leave voice");
             _toolTip.SetToolTip(_voiceCard.NoiseButton, "Filter out steady background noise like fans or hum");
             cardHost.Controls.Add(_voiceCard);
@@ -181,6 +184,11 @@ namespace Maela
             BuildChatArea(_main);
             _main.Controls.Add(_header);
             _header.SendToBack();
+            _liveBar.Dock = DockStyle.Top;
+            _liveBar.Visible = false;
+            _liveBar.StopButton.Click += delegate { StopSharing(); RefreshShell(_engine); };
+            _main.Controls.Add(_liveBar);
+            _liveBar.SendToBack(); // Above the header.
 
             _home.Dock = DockStyle.Fill;
             _home.HostButton.Click += delegate { ShowHostRoomDialog(null); };

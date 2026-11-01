@@ -132,6 +132,7 @@ namespace Maela
                 }
             };
             card.PeerSettingsChanged += delegate { _channels.Invalidate(); };
+            card.WatchClicked += delegate { card.Close(); WatchStream(member); };
             card.FormClosed += delegate { if (Object.ReferenceEquals(_openCard, card)) _openCard = null; };
 
             Rectangle area = Screen.FromPoint(screenLocation).WorkingArea;
@@ -218,6 +219,7 @@ namespace Maela
         public event EventHandler EditProfileClicked;
         public event Action<int> MoveClicked;
         public event Action<bool> KickClicked;
+        public event EventHandler WatchClicked;
         public event EventHandler PeerSettingsChanged;
 
         private readonly RoomMemberInfo _member;
@@ -260,6 +262,20 @@ namespace Maela
             }
             else
             {
+                LiveStreamInfo live = engine.GetLiveStream(member.Id);
+                if (live != null)
+                {
+                    FlatButton watch = new FlatButton();
+                    watch.Look = ButtonLook.Danger;
+                    watch.Icon = IconKind.Screen;
+                    watch.Text = "Watch stream · " + live.Height + "p" + live.Fps;
+                    watch.Underlay = Theme.Current.Surface;
+                    watch.Enabled = member.ChannelId > 0 && member.ChannelId == engine.LocalChannelId;
+                    watch.SetBounds(16, y, width - 32, 36);
+                    watch.Click += delegate { if (WatchClicked != null) WatchClicked(this, EventArgs.Empty); };
+                    Controls.Add(watch);
+                    y += 46;
+                }
                 Label caption = new Label();
                 caption.AutoSize = true;
                 caption.Font = Ui.SmallBold;
