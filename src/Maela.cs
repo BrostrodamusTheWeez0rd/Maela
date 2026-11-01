@@ -1874,6 +1874,12 @@ namespace Maela
                 _memberChannels.Clear();
                 _channels.Clear();
                 _channelKinds.Clear();
+                _profiles.Clear();
+                _profileBlobs.Clear();
+                _profileUploads.Clear();
+                _profileDownloads.Clear();
+                _advertisedProfiles.Clear();
+                _lastProfileChangeUtc.Clear();
                 _peerVolumes.Clear();
                 _peerMutes.Clear();
                 _lastSpeakingUtc.Clear();
@@ -2111,6 +2117,9 @@ namespace Maela
             if (HandleHostChatPacket(known, packet))
                 return;
 
+            if (HandleHostProfilePacket(known, packet))
+                return;
+
             if (packet.Type == PacketLeave)
             {
                 RemoveHostParticipant(key, true);
@@ -2197,6 +2206,9 @@ namespace Maela
                     channel = 1;
                 _viewChannelId = channel;
                 _chatSyncedChannel = -1;
+                ProfileReconnected();
+                lock (_stateLock)
+                    ApplyLocalProfileLocked();
                 RequestChannel(channel);
                 return;
             }
@@ -2235,6 +2247,9 @@ namespace Maela
             }
 
             if (HandleClientChatPacket(packet))
+                return;
+
+            if (HandleClientProfilePacket(packet))
                 return;
 
             if (ClientHandlePong(packet))
@@ -2379,6 +2394,7 @@ namespace Maela
                     SendPing();
                 }
                 ClientChatMaintenance(now, keepAliveDue);
+                ClientProfileMaintenance(now);
             }
         }
 
@@ -2429,6 +2445,7 @@ namespace Maela
                     _peerMutes.Remove(removed.Id);
                     _lastSpeakingUtc.Remove(removed.Id);
                     _memberFlags.Remove(removed.Id);
+                    ForgetProfileLocked(removed.Id);
                 }
             }
 
@@ -2533,6 +2550,7 @@ namespace Maela
                     for (int t = 0; t < textIds.Count && t < 255; t++)
                         writer.Write(textIds[t]);
                 }
+                WriteProfileSection(writer);
             }
 
             writer.Flush();
@@ -2601,9 +2619,17 @@ namespace Maela
 
             // Extension sections (see BuildPeerListPayload). Unknown sections end parsing.
             HashSet<int> parsedTextChannels = new HashSet<int>();
+            Dictionary<uint, uint> parsedProfiles = new Dictionary<uint, uint>();
             while (offset < payload.Length)
             {
                 byte section = payload[offset++];
+                if (section == PeerListSectionProfiles)
+                {
+                    offset = ReadProfileSection(payload, offset, parsedProfiles);
+                    if (offset < 0)
+                        break;
+                    continue;
+                }
                 if (section != PeerListSectionTextChannels || offset >= payload.Length)
                     break;
                 int textCount = payload[offset++];
@@ -2642,6 +2668,7 @@ namespace Maela
                 _channelKinds.Clear();
                 foreach (int textId in parsedTextChannels)
                     _channelKinds[textId] = ChannelKindText;
+                ApplyAdvertisedProfilesLocked(parsedProfiles);
                 if (_viewChannelId != 0 && !_channels.ContainsKey(_viewChannelId))
                     _viewChannelId = _channels.ContainsKey(1) ? 1 : 0;
 

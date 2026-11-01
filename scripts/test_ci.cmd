@@ -85,6 +85,13 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Profiles (including hostile members) ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\ProfileTests.exe" /main:Maela.Tests.ProfileTests %REFS% %ENGINE% "tests\ProfileTests.cs"
+if errorlevel 1 exit /b 1
+"obj\ProfileTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Reconnecting after a crash ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\ReconnectTests.exe" /main:Maela.Tests.ReconnectTests %REFS% %ENGINE% "tests\ReconnectTests.cs"
 if errorlevel 1 exit /b 1
