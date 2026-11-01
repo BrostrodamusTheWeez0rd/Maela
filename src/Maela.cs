@@ -1112,6 +1112,7 @@ namespace Maela
         public int Id;
         public string Name;
         public int MemberCount;
+        public bool IsText;         // Chat-only channel: no voice.
 
         public override string ToString()
         {
@@ -1204,6 +1205,43 @@ namespace Maela
         private DateTime _lastPeerListBroadcastUtc;
         private volatile int _peerListRepeats;
         private int _nextChannelId = 2;
+
+        public const byte ChannelKindVoice = 0;
+        public const byte ChannelKindText = 1;
+        /// <summary>Marks a chat-only channel in a saved room's channel list.</summary>
+        public const string TextChannelMarker = "\u0001";
+        private readonly Dictionary<int, byte> _channelKinds = new Dictionary<int, byte>();
+        private int _viewChannelId;
+
+        /// <summary>The channel whose chat is open (highlighted). You can read and post there.</summary>
+        public int ViewChannelId { get { return _viewChannelId; } }
+
+        public bool IsTextChannel(int channelId)
+        {
+            lock (_stateLock)
+                return IsTextChannelLocked(channelId);
+        }
+
+        private bool IsTextChannelLocked(int channelId)
+        {
+            byte kind;
+            return _channelKinds.TryGetValue(channelId, out kind) && kind == ChannelKindText;
+        }
+
+        /// <summary>
+        /// Opens a channel's chat (one click in the sidebar). Doesn't join voice. The host is told
+        /// so it sends that channel's history and new messages.
+        /// </summary>
+        public void ViewChannel(int channelId)
+        {
+            lock (_stateLock)
+            {
+                if (!_channels.ContainsKey(channelId))
+                    return;
+            }
+            _viewChannelId = channelId;
+            _chatSyncedChannel = -1; // Sync (and fetch history) straight away.
+        }
         private int _masterVolumePercent = 100;
         private int _micVolumePercent = 100;
         private long _txPackets;
@@ -1342,6 +1380,7 @@ namespace Maela
                     VoiceChannelInfo info = new VoiceChannelInfo();
                     info.Id = pair.Key;
                     info.Name = pair.Value;
+                    info.IsText = IsTextChannelLocked(pair.Key);
                     int count = 0;
                     foreach (KeyValuePair<uint, int> member in _memberChannels)
                     {
@@ -1421,9 +1460,11 @@ namespace Maela
 
             lock (_stateLock)
             {
-                if (channelId != 0 && !_channels.ContainsKey(channelId))
-                    return;
+                if (channelId != 0 && (!_channels.ContainsKey(channelId) || IsTextChannelLocked(channelId)))
+                    return; // Chat-only channels have no voice.
             }
+            if (channelId > 0)
+                ViewChannel(channelId); // Joining a channel also opens its chat.
 
             if (_isHost)
             {
@@ -1449,6 +1490,11 @@ namespace Maela
 
         public int CreateChannel(string name)
         {
+            return CreateChannel(name, false);
+        }
+
+        public int CreateChannel(string name, bool textOnly)
+        {
             if (!_isHost)
                 return 0;
 
@@ -1465,6 +1511,8 @@ namespace Maela
                 while (_channels.ContainsKey(id))
                     id = _nextChannelId++;
                 _channels[id] = clean;
+                if (textOnly)
+                    _channelKinds[id] = ChannelKindText;
             }
 
             BroadcastPeerList();
@@ -1501,6 +1549,9 @@ namespace Maela
                 if (!_channels.ContainsKey(channelId))
                     return;
                 _channels.Remove(channelId);
+                _channelKinds.Remove(channelId);
+                if (_viewChannelId == channelId)
+                    _viewChannelId = 1;
 
                 List<uint> ids = new List<uint>(_memberChannels.Keys);
                 int i;
@@ -1514,6 +1565,8 @@ namespace Maela
                 {
                     if (pair.Value.ChannelId == channelId)
                         pair.Value.ChannelId = 1;
+                    if (pair.Value.ViewChannelId == channelId)
+                        pair.Value.ViewChannelId = 1;
                 }
 
                 if (_localChannelId == channelId)
@@ -1564,7 +1617,10 @@ namespace Maela
         private static string CleanChannelName(string value)
         {
             string clean = value == null ? String.Empty : value.Trim();
-            clean = clean.Replace("\r", " ").Replace("\n", " ").Replace("|", " ");
+            StringBuilder printable = new StringBuilder(clean.Length);
+            foreach (char ch in clean)
+                printable.Append(Char.IsControl(ch) ? ' ' : ch);
+            clean = printable.ToString().Trim().Replace("|", " ");
             while (clean.IndexOf("  ", StringComparison.Ordinal) >= 0)
                 clean = clean.Replace("  ", " ");
             if (clean.Length > 32)
@@ -1685,9 +1741,13 @@ namespace Maela
                     int i;
                     for (i = 0; i < channelNames.Count && nextId <= 16; i++)
                     {
-                        string clean = CleanChannelName(channelNames[i]);
+                        string raw = channelNames[i] ?? String.Empty;
+                        bool text = raw.StartsWith(TextChannelMarker, StringComparison.Ordinal) && nextId > 1; // #1 stays voice.
+                        string clean = CleanChannelName(text ? raw.Substring(TextChannelMarker.Length) : raw);
                         if (clean.Length == 0)
                             continue;
+                        if (text)
+                            _channelKinds[nextId] = ChannelKindText;
                         _channels[nextId++] = clean;
                     }
                 }
@@ -1698,6 +1758,7 @@ namespace Maela
                 }
                 _nextChannelId = nextId;
                 _localChannelId = 1;
+                _viewChannelId = 1;
                 _memberNames[_localId] = _localName;
                 _memberChannels[_localId] = _localChannelId;
             }
@@ -1758,6 +1819,7 @@ namespace Maela
 
         private void ResetState()
         {
+            _viewChannelId = 0;
             _txBytes = 0;
             _voiceEncoder = new VoiceEncoder();
             _txPackets = 0;
@@ -1779,6 +1841,7 @@ namespace Maela
                 _memberNames.Clear();
                 _memberChannels.Clear();
                 _channels.Clear();
+                _channelKinds.Clear();
                 _peerVolumes.Clear();
                 _peerMutes.Clear();
                 _lastSpeakingUtc.Clear();
@@ -2029,9 +2092,11 @@ namespace Maela
                 int requestedChannel = BitConverter.ToInt32(packet.Payload, 0);
                 lock (_stateLock)
                 {
-                    if (requestedChannel != 0 && !_channels.ContainsKey(requestedChannel))
+                    if (requestedChannel != 0 && (!_channels.ContainsKey(requestedChannel) || IsTextChannelLocked(requestedChannel)))
                         return;
                     known.ChannelId = requestedChannel;
+                    if (requestedChannel > 0)
+                        known.ViewChannelId = requestedChannel;
                     _memberChannels[known.Id] = requestedChannel;
                 }
                 BroadcastPeerList();
@@ -2096,7 +2161,11 @@ namespace Maela
                 _joinStartedUtc = DateTime.MinValue;
                 SetLastMessage(String.Empty);
                 int channel = packet.Payload != null && packet.Payload.Length >= 4 ? BitConverter.ToInt32(packet.Payload, 0) : 1;
-                RequestChannel(channel > 0 ? channel : 1);
+                if (channel <= 0)
+                    channel = 1;
+                _viewChannelId = channel;
+                _chatSyncedChannel = -1;
+                RequestChannel(channel);
                 return;
             }
 
@@ -2416,11 +2485,29 @@ namespace Maela
                     writer.Write(nameBytes);
                     writer.Write(FlagsOf(pair.Key));
                 }
+
+                // Extensions. Older versions stop reading after the member list, so anything
+                // added here is ignored by them. Each section: tag byte, then its data.
+                List<int> textIds = new List<int>();
+                foreach (KeyValuePair<int, byte> kind in _channelKinds)
+                {
+                    if (kind.Value == ChannelKindText && _channels.ContainsKey(kind.Key))
+                        textIds.Add(kind.Key);
+                }
+                if (textIds.Count > 0)
+                {
+                    writer.Write(PeerListSectionTextChannels);
+                    writer.Write((byte)Math.Min(255, textIds.Count));
+                    for (int t = 0; t < textIds.Count && t < 255; t++)
+                        writer.Write(textIds[t]);
+                }
             }
 
             writer.Flush();
             return stream.ToArray();
         }
+
+        private const byte PeerListSectionTextChannels = 1;
 
         private void ParsePeerList(byte[] payload)
         {
@@ -2480,6 +2567,25 @@ namespace Maela
                 parsedMemberChannels[id] = channelId;
             }
 
+            // Extension sections (see BuildPeerListPayload). Unknown sections end parsing.
+            HashSet<int> parsedTextChannels = new HashSet<int>();
+            while (offset < payload.Length)
+            {
+                byte section = payload[offset++];
+                if (section != PeerListSectionTextChannels || offset >= payload.Length)
+                    break;
+                int textCount = payload[offset++];
+                if (offset + textCount * 4 > payload.Length)
+                    break;
+                for (i = 0; i < textCount; i++)
+                {
+                    int textId = BitConverter.ToInt32(payload, offset);
+                    offset += 4;
+                    if (parsedChannels.ContainsKey(textId))
+                        parsedTextChannels.Add(textId);
+                }
+            }
+
             List<uint> removedStreams = new List<uint>();
             int oldLocalChannel;
             lock (_stateLock)
@@ -2501,6 +2607,11 @@ namespace Maela
                 _channels.Clear();
                 foreach (KeyValuePair<int, string> channelPair in parsedChannels)
                     _channels[channelPair.Key] = channelPair.Value;
+                _channelKinds.Clear();
+                foreach (int textId in parsedTextChannels)
+                    _channelKinds[textId] = ChannelKindText;
+                if (_viewChannelId != 0 && !_channels.ContainsKey(_viewChannelId))
+                    _viewChannelId = _channels.ContainsKey(1) ? 1 : 0;
 
                 _memberNames.Clear();
                 _memberChannels.Clear();
@@ -3094,6 +3205,7 @@ namespace Maela
             public IPEndPoint Endpoint;
             public DateTime LastSeenUtc;
             public int ChannelId;
+            public int ViewChannelId;   // The channel whose chat they have open (may differ from voice).
             public DateTime LastChatUtc;
             public SecureSession Session;
             public readonly Queue<uint> RecentChatIds = new Queue<uint>();

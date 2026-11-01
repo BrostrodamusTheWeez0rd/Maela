@@ -97,7 +97,10 @@ namespace Maela
             }
         }
 
-        /// <summary>Posts a message to the voice channel we are in. Returns false if we are not in one.</summary>
+        /// <summary>
+        /// Posts a message to the channel whose chat is open (highlighted), or else the voice
+        /// channel we are in. Returns false if neither is set.
+        /// </summary>
         public bool SendChat(string text)
         {
             return Post(ChatMessage.ChatKindText, 0, CleanChatText(text));
@@ -115,7 +118,7 @@ namespace Maela
         {
             if (clean.Length == 0 || !_running || !IsConnected)
                 return false;
-            int channelId = _localChannelId;
+            int channelId = ChatChannelId;
             if (channelId <= 0 || _localId == 0)
                 return false;
 
@@ -152,6 +155,24 @@ namespace Maela
             {
                 if (_pendingChat.RemoveAll(delegate(ChatMessage m) { return m.Failed; }) > 0)
                     _chatVersion++;
+            }
+        }
+
+        /// <summary>The channel chat is posted to and synced for: the open one, else the voice channel.</summary>
+        public int ChatChannelId
+        {
+            get
+            {
+                int view = _viewChannelId;
+                if (view > 0)
+                {
+                    lock (_stateLock)
+                    {
+                        if (_channels.ContainsKey(view))
+                            return view;
+                    }
+                }
+                return _localChannelId;
             }
         }
 
@@ -232,7 +253,7 @@ namespace Maela
 
                 foreach (KeyValuePair<string, Participant> pair in _hostParticipants)
                 {
-                    if (pair.Value.ChannelId == channelId)
+                    if (pair.Value.ChannelId == channelId || pair.Value.ViewChannelId == channelId)
                         targets.Add(new IPEndPoint(pair.Value.Endpoint.Address, pair.Value.Endpoint.Port));
                 }
             }
@@ -274,8 +295,10 @@ namespace Maela
                 string name;
                 lock (_stateLock)
                 {
-                    if (known.ChannelId != channelId || channelId <= 0)
-                        return true; // Only members of a channel may post in it.
+                    // You may post in the channel you're in or the one whose chat you have open.
+                    if (channelId <= 0 || !_channels.ContainsKey(channelId) ||
+                        (known.ChannelId != channelId && known.ViewChannelId != channelId))
+                        return true;
 
                     if (known.RecentChatIds.Contains(clientId))
                     {
@@ -328,8 +351,10 @@ namespace Maela
                 IPEndPoint target;
                 lock (_stateLock)
                 {
-                    if (known.ChannelId != channelId || channelId <= 0)
+                    if (channelId <= 0 || !_channels.ContainsKey(channelId))
                         return true;
+                    // A sync names the channel whose chat this member has open.
+                    known.ViewChannelId = channelId;
                     target = new IPEndPoint(known.Endpoint.Address, known.Endpoint.Port);
                     List<ChatMessage> list;
                     if (_chat.TryGetValue(channelId, out list) && list.Count > 0)
@@ -432,7 +457,7 @@ namespace Maela
             for (r = 0; r < resend.Count; r++)
                 SendPendingChat(resend[r]);
 
-            int channelId = _localChannelId;
+            int channelId = ChatChannelId;
             if (channelId <= 0)
             {
                 _chatSyncedChannel = -1;

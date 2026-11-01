@@ -164,10 +164,34 @@ namespace Maela.Tests
                 Check(WaitFor(delegate { return alice.PingMs >= 0; }, 8000), "ping measured (" + alice.PingMs + " ms)");
                 bob.Deafened = false;
 
-                // You can only post in the channel you are in.
+                // Leaving voice keeps you in the room: you still read and post in the open channel.
                 alice.LeaveVoice();
                 Check(WaitFor(delegate { return alice.LocalChannelId == 0; }, 8000), "Alice leaves voice");
-                Check(!alice.SendChat("from the lobby"), "cannot post from the lobby");
+                Check(alice.ViewChannelId == 1 && alice.SendChat("still here"), "Alice can still post in #General");
+                Check(WaitFor(delegate { return Texts(host, 1).Contains("Alice:still here") && Texts(bob, 1).Contains("Alice:still here"); }, 8000),
+                    "her message reaches #General");
+
+                // One click opens another channel's chat without joining its voice.
+                alice.ViewChannel(2);
+                Check(WaitFor(delegate { return Confirmed(alice, 2) == 1; }, 8000), "Alice sees #Games history without joining voice");
+                Check(alice.LocalChannelId == 0, "Alice is still not in voice");
+                Check(alice.SendChat("hello games") && WaitFor(delegate { return Texts(host, 2).Contains("Alice:hello games"); }, 8000),
+                    "Alice posts in #Games while not in voice");
+                Check(!Texts(bob, 1).Contains("hello games"), "#Games post stays out of #General");
+
+                // Chat-only channels: you can post, but not join voice.
+                {
+                    int notes = host.CreateChannel("notes", true);
+                    Check(notes > 0 && WaitFor(delegate { return alice.IsTextChannel(notes); }, 8000), "chat-only channel appears for members");
+                    bob.ChangeChannel(notes);
+                    Thread.Sleep(1500);
+                    Check(bob.LocalChannelId == 1, "nobody can join voice in a chat-only channel");
+                    alice.ViewChannel(notes);
+                    bob.ViewChannel(notes);
+                    Thread.Sleep(300);
+                    Check(bob.SendChat("note 1") && WaitFor(delegate { return Texts(alice, notes) == "Bob:note 1"; }, 8000),
+                        "posts in the chat-only channel reach people who have it open");
+                }
             }
             finally
             {
