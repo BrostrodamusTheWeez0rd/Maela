@@ -1809,6 +1809,25 @@ namespace Maela
             _socket.ReceiveTimeout = 250;
             _socket.ReceiveBufferSize = 1024 * 1024;
             _socket.SendBufferSize = 1024 * 1024;
+            DisableConnectionResetErrors(_socket);
+        }
+
+        /// <summary>
+        /// On Windows, sending to a port nobody listens on any more (someone whose mæla crashed)
+        /// makes later receives fail with "connection reset", flooding the receive loop with
+        /// errors right when that person is trying to rejoin. UDP has no connections, so turn
+        /// that reporting off (SIO_UDP_CONNRESET).
+        /// </summary>
+        private static void DisableConnectionResetErrors(Socket socket)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT)
+                return;
+            try
+            {
+                const int SIO_UDP_CONNRESET = unchecked((int)0x9800000C);
+                socket.IOControl(SIO_UDP_CONNRESET, new byte[] { 0, 0, 0, 0 }, null);
+            }
+            catch { }
         }
 
         private void StartThreadsAndCapture()

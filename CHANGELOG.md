@@ -9,6 +9,9 @@
 - **Quitting always cuts the connection cleanly.** Members say goodbye to the host, and a
   host that quits now tells everyone at once (they see "The host closed the room" and
   rejoin by themselves when it is back) instead of hanging for 8 seconds.
+- **Fixed: slow rejoins on Windows after a crash.** Messages to the crashed copy's closed
+  port made Windows report errors that flooded the host just as that person rejoined; mæla
+  now turns that reporting off, as UDP apps on Windows should.
 - **A clean start every time.** If an earlier copy of mæla is frozen, opening mæla again
   closes the frozen copy and starts fresh, instead of just poking the stuck window.
 - **Fixed: the old icon showing after updating.** Windows keeps a cached copy of each
