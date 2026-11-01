@@ -1858,6 +1858,7 @@ namespace Maela
 
         private void ResetState()
         {
+            ResetStreams();
             _viewChannelId = 0;
             _txBytes = 0;
             _voiceEncoder = new VoiceEncoder();
@@ -1981,6 +1982,13 @@ namespace Maela
                 IPEndPoint senderEndpoint = sender as IPEndPoint;
                 if (senderEndpoint == null)
                     continue;
+
+                // Screen-share media straight from another member (sealed with that pair's keys).
+                if (length >= 6 && receiveBuffer[5] == OuterMedia && BitConverter.ToUInt32(receiveBuffer, 0) == Magic && receiveBuffer[4] == WireVersion)
+                {
+                    try { TryHandleDirectMedia(senderEndpoint, receiveBuffer, length); } catch { }
+                    continue;
+                }
 
                 Packet packet;
                 SecureSession viaPending;
@@ -2127,6 +2135,9 @@ namespace Maela
             if (HandleHostProfilePacket(known, packet))
                 return;
 
+            if (HandleHostStreamPacket(known, packet))
+                return;
+
             if (packet.Type == PacketLeave)
             {
                 RemoveHostParticipant(key, true);
@@ -2259,6 +2270,9 @@ namespace Maela
             if (HandleClientProfilePacket(packet))
                 return;
 
+            if (HandleClientStreamPacket(packet))
+                return;
+
             if (ClientHandlePong(packet))
                 return;
 
@@ -2322,6 +2336,8 @@ namespace Maela
         {
             DateTime now = DateTime.UtcNow;
             PruneSecurityState();
+            HostStreamMaintenance(now);
+            StreamLinkMaintenance(now);
             List<string> expired = new List<string>();
 
             lock (_stateLock)
@@ -2350,6 +2366,7 @@ namespace Maela
         /// <summary>Client: drop the current connection and keep trying to rejoin with a fresh handshake.</summary>
         private void LoseConnection(string message)
         {
+            ResetStreams();
             _connected = false;
             _localId = 0;
             _localChannelId = 0;
@@ -2402,6 +2419,7 @@ namespace Maela
                 }
                 ClientChatMaintenance(now, keepAliveDue);
                 ClientProfileMaintenance(now);
+                StreamLinkMaintenance(now);
             }
         }
 
@@ -2558,6 +2576,7 @@ namespace Maela
                         writer.Write(textIds[t]);
                 }
                 WriteProfileSection(writer);
+                WriteStreamSection(writer);
             }
 
             writer.Flush();
@@ -2627,9 +2646,17 @@ namespace Maela
             // Extension sections (see BuildPeerListPayload). Unknown sections end parsing.
             HashSet<int> parsedTextChannels = new HashSet<int>();
             Dictionary<uint, uint> parsedProfiles = new Dictionary<uint, uint>();
+            Dictionary<uint, LiveStreamInfo> parsedStreams = new Dictionary<uint, LiveStreamInfo>();
             while (offset < payload.Length)
             {
                 byte section = payload[offset++];
+                if (section == PeerListSectionStreams)
+                {
+                    offset = ReadStreamSection(payload, offset, parsedStreams);
+                    if (offset < 0)
+                        break;
+                    continue;
+                }
                 if (section == PeerListSectionProfiles)
                 {
                     offset = ReadProfileSection(payload, offset, parsedProfiles);
@@ -2652,6 +2679,7 @@ namespace Maela
             }
 
             List<uint> removedStreams = new List<uint>();
+            List<StreamLink> endedLinks = null;
             int oldLocalChannel;
             lock (_stateLock)
             {
@@ -2676,6 +2704,7 @@ namespace Maela
                 foreach (int textId in parsedTextChannels)
                     _channelKinds[textId] = ChannelKindText;
                 ApplyAdvertisedProfilesLocked(parsedProfiles);
+                endedLinks = ApplyLiveStreamsLocked(parsedStreams);
                 if (_viewChannelId != 0 && !_channels.ContainsKey(_viewChannelId))
                     _viewChannelId = _channels.ContainsKey(1) ? 1 : 0;
 
@@ -2697,6 +2726,11 @@ namespace Maela
                 _localChannelId = _memberChannels.TryGetValue(_localId, out localChannel) ? localChannel : 0;
             }
 
+            if (endedLinks != null)
+                foreach (StreamLink ended in endedLinks)
+                    ended.Dispose();
+            if (_localStreamId != 0 && _localChannelId <= 0)
+                StopScreenShare(); // Leaving voice ends your stream.
             if (oldLocalChannel != _localChannelId)
                 DisposePlaybackStreams();
             else
@@ -3213,6 +3247,8 @@ namespace Maela
             {
                 try { maintenanceThread.Join(800); } catch { }
             }
+
+            ResetStreams();
 
             // Stop the capture thread first, so no buffer is handed back or read while closing.
             IntPtr waveIn = StopCapture();

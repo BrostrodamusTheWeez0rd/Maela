@@ -92,6 +92,13 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Screen-share transport ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\StreamTests.exe" /main:Maela.Tests.StreamTests %REFS% %ENGINE% "tests\StreamTests.cs"
+if errorlevel 1 exit /b 1
+"obj\StreamTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Reconnecting after a crash ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\ReconnectTests.exe" /main:Maela.Tests.ReconnectTests %REFS% %ENGINE% "tests\ReconnectTests.cs"
 if errorlevel 1 exit /b 1
