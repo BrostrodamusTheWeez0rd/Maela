@@ -35,6 +35,15 @@ namespace Maela
         NotRunning
     }
 
+    internal enum RestoreResult
+    {
+        Restored,
+        WrongPassword,
+        NotABackup,
+        StillOnline,
+        CouldNotSave
+    }
+
     /// <summary>
     /// Friend codes: everything needed to reach and verify one person, in one pasteable string.
     ///
@@ -135,6 +144,88 @@ namespace Maela
         }
     }
 
+    /// <summary>
+    /// The password-protected backup file. PBKDF2-HMAC-SHA256 turns the password into a key, which
+    /// encrypts with the same AES-256-CTR and HMAC-SHA256 as everything else.
+    ///
+    /// Layout: magic "MAELABK1" (8) | iterations (4) | salt (16) | counter (8) | ciphertext | tag (16)
+    /// </summary>
+    internal static class FriendBackup
+    {
+        public const int MaxFileBytes = 1024 * 1024;
+        public const int MinPasswordLength = 10;
+        private const int Iterations = 600000;
+        private const int MinIterations = 100000;
+        private const int MaxIterations = 5000000; // A crafted file can't freeze mæla for hours.
+        private const int HeaderBytes = 28;
+        private static readonly byte[] FileMagic = Encoding.ASCII.GetBytes("MAELABK1");
+
+        public static byte[] Seal(byte[] plaintext, string password)
+        {
+            byte[] header = new byte[HeaderBytes];
+            Buffer.BlockCopy(FileMagic, 0, header, 0, 8);
+            Buffer.BlockCopy(BitConverter.GetBytes(Iterations), 0, header, 8, 4);
+            Buffer.BlockCopy(CryptoUtil.Random(16), 0, header, 12, 16);
+            using (PacketCipher cipher = new PacketCipher(DeriveKey(password, header)))
+                return cipher.Seal(header, plaintext);
+        }
+
+        public static bool LooksLikeBackup(byte[] data)
+        {
+            if (data == null || data.Length < HeaderBytes + 24 || data.Length > MaxFileBytes)
+                return false;
+            int i;
+            for (i = 0; i < 8; i++)
+            {
+                if (data[i] != FileMagic[i])
+                    return false;
+            }
+            int iterations = BitConverter.ToInt32(data, 8);
+            return iterations >= MinIterations && iterations <= MaxIterations;
+        }
+
+        /// <summary>Returns null if the password is wrong or the file has been changed.</summary>
+        public static byte[] Open(byte[] data, string password)
+        {
+            if (!LooksLikeBackup(data))
+                return null;
+            byte[] header = new byte[HeaderBytes];
+            Buffer.BlockCopy(data, 0, header, 0, HeaderBytes);
+            using (PacketCipher cipher = new PacketCipher(DeriveKey(password, header)))
+                return cipher.Open(data, data.Length, HeaderBytes);
+        }
+
+        private static byte[] DeriveKey(string password, byte[] header)
+        {
+            byte[] salt = new byte[16];
+            Buffer.BlockCopy(header, 12, salt, 0, 16);
+            byte[] stretched = Pbkdf2(Encoding.UTF8.GetBytes(password ?? String.Empty), salt, BitConverter.ToInt32(header, 8));
+            return Hkdf.DeriveKey(salt, stretched, FileMagic, 64);
+        }
+
+        /// <summary>PBKDF2-HMAC-SHA256 (RFC 8018), one 32-byte block. Checked against a published vector.</summary>
+        internal static byte[] Pbkdf2(byte[] password, byte[] salt, int iterations)
+        {
+            using (HMACSHA256 mac = new HMACSHA256(password))
+            {
+                byte[] first = new byte[salt.Length + 4];
+                Buffer.BlockCopy(salt, 0, first, 0, salt.Length);
+                first[first.Length - 1] = 1;
+                byte[] block = mac.ComputeHash(first);
+                byte[] result = (byte[])block.Clone();
+                int i;
+                for (i = 1; i < iterations; i++)
+                {
+                    block = mac.ComputeHash(block);
+                    int k;
+                    for (k = 0; k < result.Length; k++)
+                        result[k] ^= block[k];
+                }
+                return result;
+            }
+        }
+    }
+
     /// <summary>What the UI sees of one person. A copy: changing it changes nothing.</summary>
     internal sealed class FriendInfo
     {
@@ -194,6 +285,31 @@ namespace Maela
                 }
             }
             if (changed)
+                Save();
+        }
+
+        /// <summary>A friend restored a backup, so your unsent messages start numbering again.</summary>
+        public void Renumber(ulong oldSequence, ulong newSequence)
+        {
+            foreach (FriendChatEntry entry in Entries)
+            {
+                if (entry.Mine && !entry.Delivered && entry.Sequence == oldSequence)
+                {
+                    entry.Sequence = newSequence;
+                    break;
+                }
+            }
+        }
+
+        public void SaveNow()
+        {
+            Save();
+        }
+
+        /// <summary>After restoring a backup, messages still waiting here can no longer be sent.</summary>
+        public void DropUnsent()
+        {
+            if (Entries.RemoveAll(delegate(FriendChatEntry e) { return e.Mine && !e.Delivered; }) > 0)
                 Save();
         }
 
@@ -333,6 +449,8 @@ namespace Maela
         private string _code = String.Empty;
         private string _lastCode = String.Empty; // Survives restarts, to notice your address changing while you were away.
         private int _version;
+        private uint _incarnation; // Changes on every restore, so friends know to start numbering again.
+        private bool _backedUp;
 
         /// <summary>Raised on the service's thread when someone sends you a message.</summary>
         public event Action<string, string> MessageReceived;
@@ -356,6 +474,9 @@ namespace Maela
         public bool StorageFailed { get { return _saveBlocked; } }
 
         public int Port { get; private set; }
+
+        /// <summary>False until you've made a backup. Nothing else can recover your account.</summary>
+        public bool BackedUp { get { lock (_lock) return _backedUp; } }
         public FriendStatus Status { get { lock (_lock) return _status; } }
         public string Id { get { return Hex(_fingerprint); } }
         public byte[] PublicKey { get { return (byte[])_publicKey.Clone(); } }
@@ -665,6 +786,113 @@ namespace Maela
                 Bump();
                 FlushOutbox(person);
                 return true;
+            }
+        }
+
+        // ----- Backup -----
+
+        /// <summary>
+        /// Writes your key and friends list to a file encrypted with a key derived from the
+        /// password. Chats and unsent messages aren't included: they stay on this PC.
+        /// </summary>
+        public void ExportBackup(string path, string password)
+        {
+            byte[] plain;
+            lock (_lock)
+                plain = Encoding.UTF8.GetBytes(Serialize(true));
+            byte[] data = FriendBackup.Seal(plain, password);
+            Array.Clear(plain, 0, plain.Length);
+            File.WriteAllBytes(path, data);
+            lock (_lock)
+            {
+                _backedUp = true;
+                Save();
+                Bump();
+            }
+        }
+
+        /// <summary>Replaces your account with a backup's. You must be Offline first. The old file is kept.</summary>
+        public RestoreResult RestoreBackup(string path, string password)
+        {
+            byte[] data;
+            try
+            {
+                if (new FileInfo(path).Length > FriendBackup.MaxFileBytes)
+                    return RestoreResult.NotABackup;
+                data = File.ReadAllBytes(path);
+            }
+            catch
+            {
+                return RestoreResult.NotABackup;
+            }
+            if (!FriendBackup.LooksLikeBackup(data))
+                return RestoreResult.NotABackup;
+            byte[] plain = FriendBackup.Open(data, password);
+            if (plain == null)
+                return RestoreResult.WrongPassword;
+
+            lock (_lock)
+            {
+                if (_running)
+                    return RestoreResult.StillOnline;
+
+                // Check it all first: a bad file mustn't cost you the account you have.
+                Dictionary<string, Person> oldPeople = new Dictionary<string, Person>(_people);
+                byte[] oldKey = _privateKey;
+                int oldPort = _preferredPort;
+                string oldCode = _lastCode;
+                uint oldIncarnation = _incarnation;
+                bool oldBackedUp = _backedUp;
+                Action putBack = delegate
+                {
+                    _people.Clear();
+                    foreach (KeyValuePair<string, Person> pair in oldPeople)
+                        _people[pair.Key] = pair.Value;
+                    UseKey(oldKey);
+                    _preferredPort = oldPort;
+                    _lastCode = oldCode;
+                    _incarnation = oldIncarnation;
+                    _backedUp = oldBackedUp;
+                };
+                _people.Clear();
+                _privateKey = null;
+                if (!Parse(Encoding.UTF8.GetString(plain)))
+                {
+                    putBack();
+                    return RestoreResult.NotABackup;
+                }
+
+                string store = StorePath;
+                if (File.Exists(store))
+                {
+                    string kept = Path.Combine(_folder, "friends-v1.replaced");
+                    int n = 1;
+                    while (File.Exists(kept))
+                        kept = Path.Combine(_folder, "friends-v1.replaced" + n++);
+                    try { File.Move(store, kept); }
+                    catch
+                    {
+                        putBack();
+                        return RestoreResult.CouldNotSave;
+                    }
+                }
+
+                // The backup's numbering may be out of date. Friends see the new incarnation and start again.
+                _incarnation = NewIncarnation();
+                _lastCode = String.Empty;
+                _backedUp = true;
+                _saveBlocked = false;
+                IdentityWasLost = false;
+                foreach (Person person in _people.Values)
+                {
+                    person.LastSent = 0;
+                    person.LastReceived = 0;
+                    person.PeerIncarnation = 0;
+                    ChatOf(person).DropUnsent();
+                }
+                Save();
+                Bump();
+                return RestoreResult.Restored;
             }
         }
 
@@ -1230,32 +1458,34 @@ namespace Maela
             session.LastPingUtc = now;
             byte[] name = LimitedUtf8(_name, 80);
             byte[] code = Encoding.ASCII.GetBytes(_code);
-            byte[] inner = new byte[4 + name.Length + code.Length];
+            byte[] inner = new byte[8 + name.Length + code.Length];
             inner[0] = InnerPing;
             inner[1] = (byte)_status;
-            inner[2] = (byte)name.Length;
-            Buffer.BlockCopy(name, 0, inner, 3, name.Length);
-            inner[3 + name.Length] = (byte)code.Length;
-            Buffer.BlockCopy(code, 0, inner, 4 + name.Length, code.Length);
+            Buffer.BlockCopy(BitConverter.GetBytes(_incarnation), 0, inner, 2, 4);
+            inner[6] = (byte)name.Length;
+            Buffer.BlockCopy(name, 0, inner, 7, name.Length);
+            inner[7 + name.Length] = (byte)code.Length;
+            Buffer.BlockCopy(code, 0, inner, 8 + name.Length, code.Length);
             SendInner(session, inner);
         }
 
         private void HandlePing(Person person, byte[] inner)
         {
-            if (person == null || person.State != FriendState.Friend || inner.Length < 4)
+            if (person == null || person.State != FriendState.Friend || inner.Length < 8)
                 return;
             byte status = inner[1];
             if (status < (byte)FriendStatus.Online || status > (byte)FriendStatus.Busy)
                 return;
-            int nameLength = inner[2];
-            if (3 + nameLength + 1 > inner.Length)
+            int nameLength = inner[6];
+            if (7 + nameLength + 1 > inner.Length)
                 return;
-            int codeLength = inner[3 + nameLength];
-            if (4 + nameLength + codeLength != inner.Length || nameLength > 80 || codeLength > 64)
+            int codeLength = inner[7 + nameLength];
+            if (8 + nameLength + codeLength != inner.Length || nameLength > 80 || codeLength > 64)
                 return;
 
-            string name = CleanName(Encoding.UTF8.GetString(inner, 3, nameLength));
-            string code = Encoding.ASCII.GetString(inner, 4 + nameLength, codeLength);
+            ApplyIncarnation(person, BitConverter.ToUInt32(inner, 2));
+            string name = CleanName(Encoding.UTF8.GetString(inner, 7, nameLength));
+            string code = Encoding.ASCII.GetString(inner, 8 + nameLength, codeLength);
             bool changed = person.PeerStatus != (FriendStatus)status;
             person.PeerStatus = (FriendStatus)status;
             if (name.Length > 0 && name != person.Name)
@@ -1269,6 +1499,33 @@ namespace Maela
                 Save();
             if (changed)
                 Bump();
+        }
+
+        /// <summary>
+        /// A friend who restored a backup has lost track of the numbering, in both directions.
+        /// Both of you start again from 1, and anything you hadn't delivered goes again.
+        /// </summary>
+        private void ApplyIncarnation(Person person, uint incarnation)
+        {
+            if (incarnation == 0 || incarnation == person.PeerIncarnation)
+                return;
+            bool restored = person.PeerIncarnation != 0;
+            person.PeerIncarnation = incarnation;
+            if (restored)
+            {
+                person.LastReceived = 0;
+                ulong next = 0;
+                FriendChat chat = ChatOf(person);
+                foreach (FriendChatEntry entry in person.Outbox)
+                {
+                    next++;
+                    chat.Renumber(entry.Sequence, next);
+                    entry.Sequence = next;
+                }
+                person.LastSent = next;
+                chat.SaveNow();
+            }
+            Save();
         }
 
         /// <summary>Takes a new address from a friend, only if the code is really theirs.</summary>
@@ -1299,11 +1556,12 @@ namespace Maela
             {
                 FriendChatEntry entry = person.Outbox[i];
                 byte[] text = Encoding.UTF8.GetBytes(entry.Text);
-                byte[] inner = new byte[17 + text.Length];
+                byte[] inner = new byte[21 + text.Length];
                 inner[0] = InnerMessage;
-                Buffer.BlockCopy(BitConverter.GetBytes(entry.Sequence), 0, inner, 1, 8);
-                Buffer.BlockCopy(BitConverter.GetBytes(entry.TimeUtc.Ticks), 0, inner, 9, 8);
-                Buffer.BlockCopy(text, 0, inner, 17, text.Length);
+                Buffer.BlockCopy(BitConverter.GetBytes(_incarnation), 0, inner, 1, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(entry.Sequence), 0, inner, 5, 8);
+                Buffer.BlockCopy(BitConverter.GetBytes(entry.TimeUtc.Ticks), 0, inner, 13, 8);
+                Buffer.BlockCopy(text, 0, inner, 21, text.Length);
                 SendInner(session, inner);
             }
         }
@@ -1311,9 +1569,10 @@ namespace Maela
         /// <summary>Only accepted friends get here. Everyone else's messages are dropped unread.</summary>
         private void HandleMessage(Person person, byte[] inner)
         {
-            if (person == null || person.State != FriendState.Friend || person.Current == null || inner.Length < 18 || inner.Length > 17 + MaxMessageBytes)
+            if (person == null || person.State != FriendState.Friend || person.Current == null || inner.Length < 22 || inner.Length > 21 + MaxMessageBytes)
                 return;
-            ulong sequence = BitConverter.ToUInt64(inner, 1);
+            ApplyIncarnation(person, BitConverter.ToUInt32(inner, 1));
+            ulong sequence = BitConverter.ToUInt64(inner, 5);
             if (sequence <= person.LastReceived)
             {
                 SendAck(person); // A resend: our acknowledgement got lost.
@@ -1322,8 +1581,8 @@ namespace Maela
             if (sequence != person.LastReceived + 1 || !person.AllowMessage())
                 return; // Out of order or too fast. No acknowledgement, so it comes again.
 
-            string text = CleanText(Encoding.UTF8.GetString(inner, 17, inner.Length - 17));
-            long ticks = BitConverter.ToInt64(inner, 9);
+            string text = CleanText(Encoding.UTF8.GetString(inner, 21, inner.Length - 21));
+            long ticks = BitConverter.ToInt64(inner, 13);
             person.LastReceived = sequence;
             if (text.Length > 0)
             {
@@ -1608,6 +1867,15 @@ namespace Maela
         private void NewIdentity()
         {
             UseKey(X25519.GeneratePrivateKey());
+            _incarnation = NewIncarnation();
+        }
+
+        private static uint NewIncarnation()
+        {
+            uint value = 0;
+            while (value == 0)
+                value = BitConverter.ToUInt32(CryptoUtil.Random(4), 0);
+            return value;
         }
 
         private void UseKey(byte[] privateKey)
@@ -1636,12 +1904,19 @@ namespace Maela
                         Int32.TryParse(parts[2], out _preferredPort);
                         _lastCode = parts[3];
                     }
-                    else if (parts[0] == "p" && parts.Length == 10)
+                    else if (parts[0] == "state" && parts.Length == 3)
+                    {
+                        _incarnation = UInt32.Parse(parts[1]);
+                        _backedUp = parts[2] == "1";
+                    }
+                    else if (parts[0] == "p" && parts.Length == 11)
                     {
                         Person person = new Person();
                         person.State = (FriendState)Byte.Parse(parts[1]);
                         person.Id = parts[2];
                         person.Fingerprint = FromHex(parts[2]);
+                        if (person.Fingerprint.Length != FriendCode.FingerprintLength || person.State > FriendState.Blocked)
+                            return false;
                         person.PublicKey = parts[3].Length == 0 ? null : Convert.FromBase64String(parts[3]);
                         person.Name = Encoding.UTF8.GetString(Convert.FromBase64String(parts[4]));
                         if (parts[5].Length > 0)
@@ -1653,6 +1928,7 @@ namespace Maela
                         person.LastSent = UInt64.Parse(parts[7]);
                         person.LastReceived = UInt64.Parse(parts[8]);
                         person.Unread = Int32.Parse(parts[9]);
+                        person.PeerIncarnation = UInt32.Parse(parts[10]);
                         _people[person.Id] = person;
                     }
                     else if (parts[0] == "o" && parts.Length == 5)
@@ -1672,7 +1948,11 @@ namespace Maela
                     return false;
                 }
             }
-            return _privateKey != null;
+            if (_privateKey == null)
+                return false;
+            if (_incarnation == 0)
+                _incarnation = NewIncarnation();
+            return true;
         }
 
         private void Save()
@@ -1681,25 +1961,35 @@ namespace Maela
                 return;
             try
             {
-                StringBuilder text = new StringBuilder();
-                text.Append("me|").Append(Convert.ToBase64String(_privateKey)).Append('|').Append(_preferredPort).Append('|').Append(_lastCode).Append('\n');
-                foreach (Person person in _people.Values)
-                {
-                    string address = person.Address == null ? String.Empty : person.Address.Address + ":" + person.Address.Port;
-                    text.Append("p|").Append((byte)person.State).Append('|').Append(person.Id).Append('|')
-                        .Append(person.PublicKey == null ? String.Empty : Convert.ToBase64String(person.PublicKey)).Append('|')
-                        .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(person.Name))).Append('|')
-                        .Append(address).Append('|').Append(person.LastSeenUtc.Ticks).Append('|')
-                        .Append(person.LastSent).Append('|').Append(person.LastReceived).Append('|').Append(person.Unread).Append('\n');
-                    foreach (FriendChatEntry entry in person.Outbox)
-                    {
-                        text.Append("o|").Append(person.Id).Append('|').Append(entry.Sequence).Append('|').Append(entry.TimeUtc.Ticks).Append('|')
-                            .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.Text))).Append('\n');
-                    }
-                }
-                EncryptedFile.Write(StorePath, Encoding.UTF8.GetBytes(text.ToString()));
+                EncryptedFile.Write(StorePath, Encoding.UTF8.GetBytes(Serialize(false)));
             }
             catch { }
+        }
+
+        /// <summary>A backup leaves out unsent messages, which belong to this PC.</summary>
+        private string Serialize(bool forBackup)
+        {
+            StringBuilder text = new StringBuilder();
+            text.Append("me|").Append(Convert.ToBase64String(_privateKey)).Append('|').Append(_preferredPort).Append('|').Append(_lastCode).Append('\n');
+            text.Append("state|").Append(_incarnation).Append('|').Append(_backedUp ? "1" : "0").Append('\n');
+            foreach (Person person in _people.Values)
+            {
+                string address = person.Address == null ? String.Empty : person.Address.Address + ":" + person.Address.Port;
+                text.Append("p|").Append((byte)person.State).Append('|').Append(person.Id).Append('|')
+                    .Append(person.PublicKey == null ? String.Empty : Convert.ToBase64String(person.PublicKey)).Append('|')
+                    .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(person.Name))).Append('|')
+                    .Append(address).Append('|').Append(person.LastSeenUtc.Ticks).Append('|')
+                    .Append(person.LastSent).Append('|').Append(person.LastReceived).Append('|').Append(forBackup ? 0 : person.Unread).Append('|')
+                    .Append(person.PeerIncarnation).Append('\n');
+                if (forBackup)
+                    continue;
+                foreach (FriendChatEntry entry in person.Outbox)
+                {
+                    text.Append("o|").Append(person.Id).Append('|').Append(entry.Sequence).Append('|').Append(entry.TimeUtc.Ticks).Append('|')
+                        .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.Text))).Append('\n');
+                }
+            }
+            return text.ToString();
         }
 
         // ----- Types -----
@@ -1717,6 +2007,7 @@ namespace Maela
             public DateTime LastSeenUtc = new DateTime(0, DateTimeKind.Utc);
             public ulong LastSent;
             public ulong LastReceived;
+            public uint PeerIncarnation;
             public int Unread;
             public readonly List<FriendChatEntry> Outbox = new List<FriendChatEntry>();
             public FriendChat Chat;

@@ -260,13 +260,14 @@ namespace Maela.Tests
             Check(WaitFor(delegate { return IsState(target, attacker.Id, FriendState.RequestReceived); }, 3000), "the attacker gets as far as a request");
 
             byte[] text = Encoding.UTF8.GetBytes("you never accepted me");
-            byte[] message = new byte[17 + text.Length];
+            byte[] message = new byte[21 + text.Length];
             message[0] = Message;
-            BitConverter.GetBytes((ulong)1).CopyTo(message, 1);
-            BitConverter.GetBytes(DateTime.UtcNow.Ticks).CopyTo(message, 9);
-            text.CopyTo(message, 17);
+            BitConverter.GetBytes((uint)1234).CopyTo(message, 1);
+            BitConverter.GetBytes((ulong)1).CopyTo(message, 5);
+            BitConverter.GetBytes(DateTime.UtcNow.Ticks).CopyTo(message, 13);
+            text.CopyTo(message, 21);
             byte[] accept = new byte[] { Accept, 0, 0 };
-            byte[] ping = new byte[] { Ping, (byte)FriendStatus.Online, 3, (byte)'B', (byte)'o', (byte)'b', 0 };
+            byte[] ping = new byte[] { Ping, (byte)FriendStatus.Online, 1, 2, 3, 4, 3, (byte)'B', (byte)'o', (byte)'b', 0 };
             byte[] ack = new byte[9];
             ack[0] = Ack;
             for (int i = 0; i < 40; i++)
@@ -498,6 +499,89 @@ namespace Maela.Tests
             impostor.Dispose();
         }
 
+        static string HexOf(byte[] bytes)
+        {
+            return BitConverter.ToString(bytes).Replace("-", String.Empty).ToLowerInvariant();
+        }
+
+        static void Backups()
+        {
+            byte[] pw = Encoding.ASCII.GetBytes("password");
+            byte[] salt = Encoding.ASCII.GetBytes("salt");
+            Check(HexOf(FriendBackup.Pbkdf2(pw, salt, 4096)) == "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a", "PBKDF2 matches its published test vector");
+
+            FriendService a = Online("Alice");
+            FriendService b = Online("Bob");
+            string aId = a.Id;
+            MakeFriends(a, b);
+            Check(!a.BackedUp, "a new account isn't backed up");
+            a.SendMessage(b.Id, "before backup");
+            WaitFor(delegate { return b.GetChat(aId).Count == 1; }, 3000);
+
+            string file = Path.Combine(_root, "alice.maelakey");
+            const string password = "correct horse battery";
+            a.ExportBackup(file, password);
+            Check(a.BackedUp, "the backup is remembered");
+            string raw = Encoding.GetEncoding(28591).GetString(File.ReadAllBytes(file));
+            Check(!raw.Contains("Bob") && !raw.Contains("127.0.0.1") && !raw.Contains(Convert.ToBase64String(Encoding.UTF8.GetBytes("Bob"))), "nothing is readable in the backup");
+
+            // Time passes after the backup: the numbering moves on, on both sides.
+            for (int i = 0; i < 3; i++)
+                a.SendMessage(b.Id, "after backup " + i);
+            b.SendMessage(aId, "reply");
+            WaitFor(delegate { return b.GetChat(aId).Count == 5 && a.GetChat(b.Id).Count == 5; }, 4000);
+            a.Dispose();
+            Check(b.SendMessage(aId, "while restoring"), "a friend can write while you're restoring");
+
+            // A new PC: a different key until the backup goes in.
+            FriendService fresh = Make(NewFolder());
+            Check(fresh.Id != aId, "a new PC starts as someone else");
+            Check(fresh.RestoreBackup(file, "wrong password here") == RestoreResult.WrongPassword, "a wrong password is refused");
+            Check(fresh.Id != aId, "and changes nothing");
+
+            string junk = Path.Combine(_root, "junk.maelakey");
+            File.WriteAllBytes(junk, new byte[5000]);
+            Check(fresh.RestoreBackup(junk, password) == RestoreResult.NotABackup, "a file that isn't a backup is refused");
+            byte[] tampered = File.ReadAllBytes(file);
+            tampered[tampered.Length / 2] ^= 1;
+            File.WriteAllBytes(junk, tampered);
+            Check(fresh.RestoreBackup(junk, password) == RestoreResult.WrongPassword, "a changed backup is refused");
+            byte[] slow = File.ReadAllBytes(file);
+            BitConverter.GetBytes(int.MaxValue).CopyTo(slow, 8);
+            File.WriteAllBytes(junk, slow);
+            Check(fresh.RestoreBackup(junk, password) == RestoreResult.NotABackup, "a file demanding huge work is refused");
+
+            // Correctly encrypted, with nonsense inside: must not cost the current account.
+            File.WriteAllBytes(junk, FriendBackup.Seal(Encoding.UTF8.GetBytes("nonsense|with|no|key\nme|!!!|1|x"), password));
+            string before = fresh.Id;
+            Check(fresh.RestoreBackup(junk, password) == RestoreResult.NotABackup, "a backup with nonsense inside is refused");
+            Check(fresh.Id == before, "and keeps your account");
+
+            fresh.SetStatus(FriendStatus.Online, "Alice");
+            Check(fresh.RestoreBackup(file, password) == RestoreResult.StillOnline, "restoring while online is refused");
+            fresh.SetStatus(FriendStatus.Offline, "Alice");
+            Check(fresh.RestoreBackup(file, password) == RestoreResult.Restored, "the right password restores");
+            Check(fresh.Id == aId, "your account is back");
+            Check(IsState(fresh, b.Id, FriendState.Friend), "with your friends");
+            Check(Directory.GetFiles(_root, "friends-v1.replaced", SearchOption.AllDirectories).Length == 1, "the account it replaced is kept");
+
+            fresh.SetStatus(FriendStatus.Online, "Alice");
+            fresh.SetAddress(IPAddress.Loopback, fresh.Port);
+            b.AddByCode(fresh.Code); // The new PC has a new address.
+            Check(WaitFor(delegate { return Find(b, aId).Status == FriendStatus.Online; }, 4000), "your friend reaches you again, with no new request");
+
+            // The backup was out of date. Nothing may be taken for a duplicate or stuck as out of order.
+            Check(WaitFor(delegate { return fresh.GetChat(b.Id).Count == 1 && fresh.GetChat(b.Id)[0].Text == "while restoring"; }, 4000), "a waiting message arrives after an out-of-date restore");
+            fresh.SendMessage(b.Id, "new from restored");
+            Check(WaitFor(delegate { List<FriendChatEntry> c = b.GetChat(aId); return c[c.Count - 1].Text == "new from restored"; }, 4000), "your new messages aren't taken for duplicates");
+            b.SendMessage(aId, "new from friend");
+            Check(WaitFor(delegate { List<FriendChatEntry> c = fresh.GetChat(b.Id); return c[c.Count - 1].Text == "new from friend"; }, 4000), "their new messages aren't stuck as out of order");
+            Check(WaitFor(delegate { return b.GetChat(aId).TrueForAll(delegate(FriendChatEntry e) { return !e.Mine || e.Delivered; }); }, 4000), "your friend sees everything delivered");
+
+            fresh.Dispose();
+            b.Dispose();
+        }
+
         static void Sanitising()
         {
             Check(FriendService.CleanName("Bob‮evil\u0000\n") == "Bobevil", "names lose invisible and direction characters");
@@ -518,6 +602,7 @@ namespace Maela.Tests
                 AddressChange();
                 AddressChangeAcrossRestart();
                 ModifiedCopy();
+                Backups();
                 BlockAndRemove();
                 Isolation();
                 NothingReadableOnDisk();

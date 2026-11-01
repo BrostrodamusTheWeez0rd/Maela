@@ -328,6 +328,7 @@ namespace Maela
             if (_friendsWindow == null || _friendsWindow.IsDisposed)
             {
                 _friendsWindow = new FriendsWindow(_friends);
+                _friendsWindow.ChangeStatus = SetMyStatus;
                 _friendsWindow.FormClosed += delegate { _friendsWindow = null; };
                 if (_friendAddressChanged)
                     _friendsWindow.ShowAddressChanged();
@@ -373,6 +374,10 @@ namespace Maela
         private int _chatDeliveredShown = -1;
         private string _chatIdShown;
         private bool _addressChanged;
+        private readonly FlatButton _backupButton = new FlatButton();
+
+        /// <summary>Goes through the app, which also opens and closes the router port.</summary>
+        public Action<FriendStatus> ChangeStatus;
 
         public FriendsWindow(FriendService friends)
         {
@@ -392,7 +397,7 @@ namespace Maela
 
             Panel leftTop = new Panel();
             leftTop.Dock = DockStyle.Top;
-            leftTop.Height = 100;
+            leftTop.Height = 142;
             _codeButton.Text = "Copy my friend code";
             _codeButton.Icon = IconKind.Copy;
             _codeButton.SetBounds(12, 12, 246, 36);
@@ -402,6 +407,18 @@ namespace Maela
             _addButton.Look = ButtonLook.Primary;
             _addButton.SetBounds(12, 54, 246, 36);
             _addButton.Click += delegate { AddFriend(); };
+            _backupButton.Text = "Backup and restore";
+            _backupButton.Look = ButtonLook.Ghost;
+            _backupButton.SetBounds(12, 96, 246, 36);
+            _backupButton.Click += delegate
+            {
+                ContextMenuStrip menu = new ContextMenuStrip();
+                menu.Renderer = new ThemedMenuRenderer();
+                menu.Items.Add("Back up my account\u2026", null, delegate { BackUp(); });
+                menu.Items.Add("Restore from a backup\u2026", null, delegate { Restore(); });
+                menu.Show(_backupButton, new Point(0, _backupButton.Height));
+            };
+            leftTop.Controls.Add(_backupButton);
             leftTop.Controls.Add(_codeButton);
             leftTop.Controls.Add(_addButton);
             _list.Dock = DockStyle.Fill;
@@ -464,6 +481,8 @@ namespace Maela
                     CopyCode();
                     RefreshNotice(null);
                 }
+                else if (!_friends.BackedUp && _friends.GetPeople().Count > 0)
+                    BackUp();
             };
 
             _composer.Dock = DockStyle.Bottom;
@@ -597,6 +616,88 @@ namespace Maela
             {
                 MessageBox.Show(this, ex.Message, "Could not copy friend code", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void BackUp()
+        {
+            string password;
+            using (BackupPasswordDialog dialog = new BackupPasswordDialog(true))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                    return;
+                password = dialog.Password;
+            }
+            using (SaveFileDialog save = new SaveFileDialog())
+            {
+                save.Title = "Save your m\u00E6la backup";
+                save.FileName = "maela-account.maelakey";
+                save.Filter = "m\u00E6la backup (*.maelakey)|*.maelakey";
+                if (save.ShowDialog(this) != DialogResult.OK)
+                    return;
+                Cursor = Cursors.WaitCursor;
+                try
+                {
+                    _friends.ExportBackup(save.FileName, password);
+                    MessageBox.Show(this, "Backup saved. Keep the file and your password somewhere safe, away from this PC. m\u00E6la can't recover a forgotten password.\r\n\r\nFriends you add after today won't be in it, so back up again now and then.", "Backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, "Could not save the backup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    Cursor = Cursors.Default;
+                }
+            }
+            RefreshAll(true);
+        }
+
+        private void Restore()
+        {
+            string path;
+            using (OpenFileDialog open = new OpenFileDialog())
+            {
+                open.Title = "Choose your m\u00E6la backup";
+                open.Filter = "m\u00E6la backup (*.maelakey)|*.maelakey";
+                if (open.ShowDialog(this) != DialogResult.OK)
+                    return;
+                path = open.FileName;
+            }
+            string warning = "This replaces your friend code and friends list on this PC with the ones in the backup. Messages waiting to send from this PC will be lost. The old account file is kept.\r\n\r\nDon't run the same account on two PCs at once: stop using it on the other PC first.\r\n\r\nContinue?";
+            if (MessageBox.Show(this, warning, "Restore", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
+            string password;
+            using (BackupPasswordDialog dialog = new BackupPasswordDialog(false))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                    return;
+                password = dialog.Password;
+            }
+
+            FriendStatus previous = _friends.Status;
+            if (ChangeStatus != null)
+                ChangeStatus(FriendStatus.Offline);
+            Cursor = Cursors.WaitCursor;
+            RestoreResult result = _friends.RestoreBackup(path, password);
+            Cursor = Cursors.Default;
+            if (ChangeStatus != null && previous != FriendStatus.Offline)
+                ChangeStatus(previous);
+            switch (result)
+            {
+                case RestoreResult.Restored:
+                    MessageBox.Show(this, "Your account is back. Your address has probably changed, so friends may need your new code: copy it and send it to them. If a friend pastes it, you're connected again with no new request.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    break;
+                case RestoreResult.WrongPassword:
+                    MessageBox.Show(this, "That password doesn't open this backup, or the file has been changed. Nothing was replaced.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    break;
+                case RestoreResult.NotABackup:
+                    MessageBox.Show(this, "That isn't a m\u00E6la backup. Nothing was replaced.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    break;
+                default:
+                    MessageBox.Show(this, "m\u00E6la couldn't replace your account file. Nothing was changed. Try again after restarting m\u00E6la.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    break;
+            }
+            RefreshAll(true);
         }
 
         private void AddFriend()
@@ -749,6 +850,8 @@ namespace Maela
                 text = "You're appearing offline. Friends can't reach you, and anything you write waits here until you're both online.";
             else if (_updateCodeButton.Visible)
                 text = "Haven't reached them in a while. If this seems wrong, ask for their current code.";
+            else if (!_friends.BackedUp && _friends.GetPeople().Count > 0)
+                text = "Your account isn't backed up. If you reinstall Windows, it can't be recovered. Click to back up.";
             _notice.Text = text ?? String.Empty;
             _notice.Visible = text != null;
         }
@@ -839,5 +942,40 @@ namespace Maela
                 Ui.DrawText(g, count, Ui.SmallBold, badge, t.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
+    }
+
+    /// <summary>Asks for the backup password, twice when it's a new one.</summary>
+    internal sealed class BackupPasswordDialog : ThemedDialog
+    {
+        private readonly RoundField _password;
+        private readonly RoundField _confirm;
+
+        public BackupPasswordDialog(bool creating) : base(creating ? "Back up your account" : "Restore your account", 480, creating ? 372 : 262)
+        {
+            AddHeading(creating ? "Back up your account" : "Enter your backup password",
+                creating ? "This password protects your key and friends list. m\u00E6la can't recover it if you forget it." : null);
+            _password = AddField("Password" + (creating ? " (at least " + FriendBackup.MinPasswordLength + " characters)" : String.Empty), String.Empty, true);
+            if (creating)
+                _confirm = AddField("Password again", String.Empty, true);
+            FlatButton ok = Button(creating ? "Continue" : "Restore", DialogResult.None);
+            ok.Click += delegate
+            {
+                string problem = null;
+                if (creating && _password.Box.Text.Length < FriendBackup.MinPasswordLength)
+                    problem = "Use at least " + FriendBackup.MinPasswordLength + " characters. Anyone who gets this file can try passwords as fast as their PC allows.";
+                else if (creating && _password.Box.Text != _confirm.Box.Text)
+                    problem = "The two passwords don't match.";
+                if (problem != null)
+                {
+                    MessageBox.Show(this, problem, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                DialogResult = DialogResult.OK;
+            };
+            AddButtons(Button("Cancel", DialogResult.Cancel), ok);
+            Shown += delegate { _password.Box.Focus(); };
+        }
+
+        public string Password { get { return _password.Box.Text; } }
     }
 }

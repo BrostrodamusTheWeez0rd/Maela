@@ -86,8 +86,13 @@ What it doesn't protect:
 - **Offline really is off, but it looks like anything else.** Friends can't tell Offline from a
   powered-off PC or a changed address. A message you're sent while Offline stays on the sender's
   PC, so nothing arrives unless you're both online at the same time.
-- **Lose your Windows account's keys and you lose your account.** There is no recovery without a
-  server. Friends would need to add your new code.
+- **Without a backup, losing your Windows account's keys loses your friend account.** There's no
+  server to recover it from. Friends would need to add your new code.
+- **A backup is only as strong as its password.** The Friends window can save your key and friends
+  list to a file, encrypted with a key derived from your password (PBKDF2-HMAC-SHA256, 600,000
+  rounds, then AES-256-CTR and HMAC-SHA256). Anyone who gets the file can try passwords on their own
+  hardware, and one who guesses right can impersonate you to your friends and learn their addresses.
+  mæla can't recover a forgotten password. Chats and unsent messages aren't in the backup.
 
 ## Keys and secrets on disk
 

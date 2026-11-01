@@ -183,6 +183,10 @@ Every datagram starts with magic `MFR1` (4) and a type (1).
 - A changed address reaches friends in the next PING. If both people's addresses change while
   they're apart, nothing can find them: either of them pastes the other's current code, and the
   connection updates both. mæla deliberately has no server or DHT lookup.
+- PING and MESSAGE carry a random 4-byte incarnation, which changes when someone restores a backup.
+  A backup's numbering may be out of date, so a friend who sees a new incarnation starts both
+  directions again from 1 and renumbers anything undelivered. Running one key on two PCs at once
+  keeps triggering this, so it isn't supported.
 - If neither router accepts incoming connections (for example, both behind CGNAT), friends may
   not be able to connect at all.
 

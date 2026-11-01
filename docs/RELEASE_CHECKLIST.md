@@ -16,6 +16,7 @@ Before tagging a public build:
 - [ ] Friends between two machines on different networks: first-time notice, copy a code, send a request, accept, chat both ways; nothing can be sent before accepting.
 - [ ] Friend statuses: Away and Busy show to friends; Busy makes no sound; Offline shows as offline and messages arrive after coming back.
 - [ ] Friends and queued messages survive restarting both machines; pasting a friend's new code updates them with no new request.
+- [ ] Backup and restore: back up on one PC, restore on another with the right password (a wrong one is refused), a friend pastes the new code, and messages flow both ways with no new request.
 - [ ] Friends window looks right in each theme, and blocking and removing work from the right-click menu.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.
