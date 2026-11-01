@@ -347,6 +347,11 @@ namespace Maela
             object item = _channels.Items[index];
             _contextChannel = item as VoiceChannelInfo;
             _contextMember = item as RoomMemberInfo;
+            if (e.Button == MouseButtons.Left && _contextMember != null)
+            {
+                ShowProfileCard(_contextMember, _channels.PointToScreen(e.Location));
+                return;
+            }
             if (e.Button == MouseButtons.Left && _contextChannel != null && _engine != null && _engine.IsConnected)
             {
                 // One click opens the channel's chat; double-click joins its voice.
@@ -515,7 +520,7 @@ namespace Maela
             Theme t = Theme.Current;
             int left = bounds.Left + 36;
             Rectangle avatar = new Rectangle(left, bounds.Top + (bounds.Height - 24) / 2, 24, 24);
-            Ui.DrawAvatar(g, avatar, member.Name, member.IsSpeaking, t.Side);
+            Ui.DrawAvatar(g, avatar, member.Name, member.IsSpeaking, t.Side, member.IsLocal ? MyPicture() : AvatarImage(member.Id));
 
             int right = bounds.Right - 8;
             if (member.Deafened)
@@ -807,6 +812,29 @@ namespace Maela
             }
         }
 
+        /// <summary>The member with this id in the current room, or null.</summary>
+        private RoomMemberInfo FindMember(uint id)
+        {
+            if (_engine == null)
+                return null;
+            foreach (RoomMemberInfo m in _engine.GetAllMembers())
+                if (m.Id == id) return m;
+            return null;
+        }
+
+        /// <summary>Your own card: works even when you're not in a room.</summary>
+        private void ShowMyProfileCard()
+        {
+            RoomMemberInfo me = _engine != null && _engine.IsConnected ? FindMember(_engine.LocalMemberId) : null;
+            if (me == null)
+            {
+                me = new RoomMemberInfo();
+                me.Name = _preferences.DisplayName;
+                me.IsLocal = true;
+            }
+            ShowProfileCard(me, Cursor.Position);
+        }
+
         private void ApplyPreferencesToEngine()
         {
             if (_engine == null)
@@ -994,6 +1022,7 @@ namespace Maela
             PlayTransitionSounds(engine);
             RefreshShell(engine);
             RefreshChat(engine);
+            RefreshProfiles(engine);
             RefreshLocalPresence();
             if (!_presenceScanRunning)
                 BeginPresenceScan();
@@ -1363,7 +1392,9 @@ namespace Maela
                 for (c = 0; c < channels.Length; c++)
                 {
                     VoiceChannelInfo targetChannel = channels[c];
-                    ToolStripMenuItem moveChoice = new ToolStripMenuItem("# " + targetChannel.Name);
+                    if (targetChannel.IsText)
+                        continue;
+                    ToolStripMenuItem moveChoice = new ToolStripMenuItem(targetChannel.Name);
                     moveChoice.Enabled = member.ChannelId != targetChannel.Id;
                     moveChoice.Tag = targetChannel.Id;
                     moveChoice.Click += delegate(object moveSender, EventArgs moveArgs)
@@ -1375,7 +1406,7 @@ namespace Maela
                     move.DropDownItems.Add(moveChoice);
                 }
 
-                ToolStripMenuItem lobbyChoice = new ToolStripMenuItem("Room Lobby");
+                ToolStripMenuItem lobbyChoice = new ToolStripMenuItem("Remove from voice");
                 lobbyChoice.Enabled = member.ChannelId != 0;
                 lobbyChoice.Tag = 0;
                 lobbyChoice.Click += delegate(object moveSender, EventArgs moveArgs)

@@ -99,6 +99,8 @@ namespace Maela
             _userBar.MuteButton.Click += MuteButtonClicked;
             _userBar.DeafenButton.Click += DeafenButtonClicked;
             _userBar.SettingsButton.Click += SettingsClicked;
+            _userBar.ProfileClicked += delegate { ShowMyProfileCard(); };
+            _userBar.Picture = MyPicture();
             _toolTip.SetToolTip(_userBar.DeafenButton, "Deafen: hear nobody and mute your mic");
             _toolTip.SetToolTip(_userBar.SettingsButton, "Settings");
             Panel cardHost = _cardHost;

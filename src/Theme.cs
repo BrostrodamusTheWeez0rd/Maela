@@ -224,6 +224,12 @@ namespace Maela
 
         public static void DrawAvatar(Graphics g, Rectangle r, string name, bool speaking, Color background)
         {
+            DrawAvatar(g, r, name, speaking, background, null);
+        }
+
+        /// <summary>Round avatar: the person's picture if they have one, else their initial on a colour.</summary>
+        public static void DrawAvatar(Graphics g, Rectangle r, string name, bool speaking, Color background, Image picture)
+        {
             SmoothingMode old = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             if (speaking)
@@ -232,6 +238,22 @@ namespace Maela
                     g.FillEllipse(ring, r.X - 4, r.Y - 4, r.Width + 8, r.Height + 8);
                 using (SolidBrush gap = new SolidBrush(background))
                     g.FillEllipse(gap, r.X - 2, r.Y - 2, r.Width + 4, r.Height + 4);
+            }
+            if (picture != null)
+            {
+                using (GraphicsPath circle = new GraphicsPath())
+                {
+                    circle.AddEllipse(r);
+                    Region clip = g.Clip;
+                    g.SetClip(circle, CombineMode.Intersect);
+                    InterpolationMode oldMode = g.InterpolationMode;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(picture, r);
+                    g.InterpolationMode = oldMode;
+                    g.Clip = clip;
+                }
+                g.SmoothingMode = old;
+                return;
             }
             using (SolidBrush b = new SolidBrush(ColorForName(name)))
                 g.FillEllipse(b, r);

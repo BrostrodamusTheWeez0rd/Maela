@@ -590,7 +590,7 @@ namespace Maela
             if (row.ShowHeader)
             {
                 y = e.Bounds.Top + 10;
-                Ui.DrawAvatar(g, new Rectangle(e.Bounds.Left + 20, y, 38, 38), m.SenderName, false, back);
+                Ui.DrawAvatar(g, new Rectangle(e.Bounds.Left + 20, y, 38, 38), m.SenderName, false, back, m.IsLocal ? MyPicture() : AvatarImage(m.SenderId));
                 string name = String.IsNullOrEmpty(m.SenderName) ? "Guest" : m.SenderName;
                 Size nameSize = Ui.Measure(g, name, Ui.BodyBold);
                 Ui.DrawText(g, name, Ui.BodyBold, new Point(e.Bounds.Left + ChatTextLeft, y), Ui.NameColor(name));
@@ -700,6 +700,18 @@ namespace Maela
         {
             int index = _chatList.IndexFromPoint(e.Location);
             _chatContextRow = index >= 0 && index < _chatList.Items.Count ? _chatList.Items[index] as ChatRow : null;
+            if (e.Button == MouseButtons.Left && _chatContextRow != null && _chatContextRow.Message != null && _chatContextRow.ShowHeader)
+            {
+                // Click a picture or name to open that person's card.
+                Rectangle bounds = _chatList.GetItemRectangle(index);
+                if (e.X < ChatTextLeft + 220 && e.Y < bounds.Top + 50 && (e.X < ChatTextLeft || e.Y < bounds.Top + 30))
+                {
+                    RoomMemberInfo who = FindMember(_chatContextRow.Message.SenderId);
+                    if (who != null)
+                        ShowProfileCard(who, _chatList.PointToScreen(e.Location));
+                    return;
+                }
+            }
             if (e.Button == MouseButtons.Right && _chatContextRow != null && _chatContextRow.Message != null)
             {
                 _chatList.SelectedIndex = index;

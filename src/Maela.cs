@@ -439,6 +439,7 @@ namespace Maela
         public bool CloseToTray = true;
         public bool TrayHintShown;
         public string IconRefreshedFor = String.Empty;
+        public string Status = String.Empty;
 
         public AppPreferences Clone()
         {
@@ -459,6 +460,7 @@ namespace Maela
             p.CloseToTray = CloseToTray;
             p.TrayHintShown = TrayHintShown;
             p.IconRefreshedFor = IconRefreshedFor;
+            p.Status = Status;
             return p;
         }
     }
@@ -547,6 +549,10 @@ namespace Maela
                     {
                         p.TrayHintShown = value == "1";
                     }
+                    else if (key == "status")
+                    {
+                        try { p.Status = VoipEngine.CleanStatus(Encoding.UTF8.GetString(Convert.FromBase64String(value))); } catch { }
+                    }
                     else if (key == "iconver")
                     {
                         p.IconRefreshedFor = value.Trim();
@@ -583,7 +589,8 @@ namespace Maela
                     "agc=" + (p.AutoGain ? "1" : "0"),
                     "tray=" + (p.CloseToTray ? "1" : "0"),
                     "trayhint=" + (p.TrayHintShown ? "1" : "0"),
-                    "iconver=" + (p.IconRefreshedFor ?? String.Empty)
+                    "iconver=" + (p.IconRefreshedFor ?? String.Empty),
+                    "status=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(p.Status ?? String.Empty))
                 });
             }
             catch { }

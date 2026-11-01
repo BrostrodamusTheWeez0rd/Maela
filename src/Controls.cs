@@ -481,6 +481,23 @@ namespace Maela
     /// <summary>Bottom-left bar: you, plus mute / deafen / settings.</summary>
     internal sealed class UserBar : Control
     {
+        /// <summary>Your profile picture (null: your initial).</summary>
+        public Image Picture;
+        /// <summary>Raised when you click your picture or name.</summary>
+        public event EventHandler ProfileClicked;
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (e.Button == MouseButtons.Left && e.X < Width - 124 && ProfileClicked != null)
+                ProfileClicked(this, EventArgs.Empty);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            Cursor = e.X < Width - 124 ? Cursors.Hand : Cursors.Default;
+        }
         public readonly FlatButton MuteButton = new FlatButton();
         public readonly FlatButton DeafenButton = new FlatButton();
         public readonly FlatButton SettingsButton = new FlatButton();
@@ -537,7 +554,7 @@ namespace Maela
             g.Clear(t.Rail);
             using (Pen line = new Pen(t.Line))
                 g.DrawLine(line, 0, 0, Width, 0);
-            Ui.DrawAvatar(g, new Rectangle(12, 13, 36, 36), _name, _speaking, t.Rail);
+            Ui.DrawAvatar(g, new Rectangle(12, 13, 36, 36), _name, _speaking, t.Rail, Picture);
             int textWidth = Width - 120 - 58;
             Ui.DrawText(g, _name, Ui.SmallBold, new Rectangle(58, 15, textWidth, 18), t.Text, TextFormatFlags.Left);
             Ui.DrawText(g, _status, Ui.Small, new Rectangle(58, 33, textWidth, 16), _statusColor, TextFormatFlags.Left);
