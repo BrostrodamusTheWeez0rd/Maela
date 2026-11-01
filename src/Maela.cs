@@ -382,11 +382,7 @@ namespace Maela
         /// </summary>
         private static void RemoveOldRoomFiles()
         {
-            string[] old = new string[]
-            {
-                Path.Combine(GetFolder(), "rooms.txt"),
-                Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RyanVoip"), "rooms.txt")
-            };
+            string[] old = new string[] { Path.Combine(GetFolder(), "rooms.txt") };
             int i;
             for (i = 0; i < old.Length; i++)
             {
@@ -467,13 +463,7 @@ namespace Maela
             {
                 string loadPath = FilePath;
                 if (!File.Exists(loadPath))
-                {
-                    string legacyPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RyanVoip", "settings.txt");
-                    if (File.Exists(legacyPath))
-                        loadPath = legacyPath;
-                    else
-                        return p;
-                }
+                    return p;
                 string[] lines = File.ReadAllLines(loadPath);
                 int i;
                 for (i = 0; i < lines.Length; i++)
