@@ -726,7 +726,7 @@ namespace Maela
         private bool _busy;
         private bool _failed;
 
-        public SetupDialog(AppPreferences preferences) : base("Welcome to mæla", 640, 610)
+        public SetupDialog(AppPreferences preferences) : base("Welcome to mæla", 640, 650)
         {
             _preferences = preferences;
             PictureBox logo = new PictureBox();
@@ -766,10 +766,13 @@ namespace Maela
             }
             Cursor_Y += 122;
 
-            AddSection("Colour emoji");
-            _status = AddText("mæla downloads " + (EmojiPack.All.Length) + " open-source emoji images (about 115 KB) from the official "
-                + EmojiPack.Name + " project (" + EmojiPack.License + ") and checks every file against a fingerprint built into the app before using it.",
-                Theme.Current.Text2, ClientSize.Width - Margin_X * 2);
+            AddSection("What mæla uses");
+            AddUse("Windows .NET Framework 4", "Runs mæla. Already part of Windows 10 and 11.", "Nothing to install");
+            AddUse("Opus voice codec (Concentus)", "Voice. BSD 3-clause, built into mæla from its official source.", "Nothing to download");
+            AddUse(EmojiPack.Name + " colour emoji", EmojiPack.License + ". " + EmojiPack.All.Length + " images from the official project; every file is checked against a fingerprint built into mæla.", "Download now, about 115 KB");
+            Cursor_Y += 2;
+            _status = AddText("Nothing else is downloaded without asking you first. Settings > Licenses has the full license texts.",
+                Theme.Current.Muted, ClientSize.Width - Margin_X * 2);
             _progress.SetBounds(Margin_X, Cursor_Y + 2, ClientSize.Width - Margin_X * 2, 8);
             _progress.Visible = false;
             Controls.Add(_progress);
@@ -781,6 +784,36 @@ namespace Maela
             AddButtons(_skip, _start);
             _skip.Width = 120;
             _skip.Left = _start.Left - 130;
+        }
+
+        /// <summary>One row of the "What mæla uses" list: name, what it's for, and what happens.</summary>
+        private void AddUse(string name, string detail, string action)
+        {
+            int width = ClientSize.Width - Margin_X * 2;
+            Label title = new Label();
+            title.AutoSize = false;
+            title.Font = Ui.SmallBold;
+            title.ForeColor = Theme.Current.Text;
+            title.Text = name;
+            title.SetBounds(Margin_X, Cursor_Y, width - 170, 18);
+            Controls.Add(title);
+            Label tag = new Label();
+            tag.AutoSize = false;
+            tag.Font = Ui.Small;
+            tag.ForeColor = Theme.Current.Accent2;
+            tag.TextAlign = ContentAlignment.TopRight;
+            tag.Text = action;
+            tag.SetBounds(Margin_X + width - 170, Cursor_Y, 170, 18);
+            Controls.Add(tag);
+            Label text = new Label();
+            text.AutoSize = false;
+            text.Font = Ui.Small;
+            text.ForeColor = Theme.Current.Text2;
+            text.Text = detail;
+            Size size = TextRenderer.MeasureText(detail, Ui.Small, new Size(width, 0), TextFormatFlags.WordBreak);
+            text.SetBounds(Margin_X, Cursor_Y + 19, width, size.Height + 2);
+            Controls.Add(text);
+            Cursor_Y += 19 + size.Height + 10;
         }
 
         private void RepaintForTheme()

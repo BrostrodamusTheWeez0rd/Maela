@@ -68,6 +68,21 @@ Decrypted DATA contains the inner packets: join, welcome, peer list, keepalive, 
 reject, audio, channel switch and the chat packets. Receivers drop anything that fails
 authentication, arrives twice, or is older than the 1,024-packet replay window.
 
+### Channels, open chats and profiles
+
+- Each member has a voice channel (0 = not in voice) and an *open* channel whose chat they
+  are reading. CHAT_SYNC tells the host which channel is open; the host sends that channel's
+  history and new messages, and accepts posts only for the channel you are in or have open.
+- Chat-only channels are listed in a peer-list extension section (tag 1). Nobody can switch
+  voice into them.
+- Profiles: PROFILE_PUT (client to host, chunked, resent until PROFILE_ACK), PROFILE_GET and
+  PROFILE_DATA (host to client, chunked). The peer list carries (member, profile version) in
+  extension section 2, so clients fetch only what changed. A profile is at most 16 KB: a status
+  line of up to 60 characters and 80×80 RGB565 pixels compressed with Deflate. Receivers
+  inflate to exactly 12,800 bytes or reject it; no image decoder runs on received data.
+- Older versions stop reading the peer list after the member entries, so extension sections
+  are ignored by them.
+
 ### Leaving and coming back
 
 - Quitting sends LEAVE three times (UDP can drop one); mæla also sends it if it crashes.

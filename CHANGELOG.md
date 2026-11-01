@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0 - Channels, profiles and Disconnect
+
+- **One click opens a channel's chat, double-click joins its voice.** You can read and type in
+  the channel you have open without being in its voice.
+- **Leave voice keeps you in the room.** You drop out of voice and off the member list (there's
+  no Lobby any more), but you can keep chatting. **Disconnect** leaves the room completely; for
+  a host it stops the room, asking first if anyone else is in it.
+- **Chat-only channels.** Hosts can create text channels (shown with #) alongside voice ones.
+- **Profiles.** Click anyone in the sidebar or chat to see their card: picture, status and
+  what they're doing, plus your own volume and mute for them (and Move, Kick and Ban for the
+  host). Click yourself to set your picture and status. Only a small 80×80 pixel copy of your
+  picture is shared, never the file or its details.
+- **One room at a time.** Opening another room asks, then leaves the current one.
+- **"What mæla uses"** in first-run setup lists everything mæla uses or downloads, with
+  licenses, before anything is fetched.
+- Security: a new hostile-member test suite, and SECURITY.md now spells out exactly what other
+  people in a room can and can't do.
+- Everyone in a room should update: older versions still connect but won't see chat-only
+  channels or profiles.
+
 ## 0.7.2 - Freeze fix
 
 - **Fixed: mæla could freeze when someone joined and started talking.** The microphone's

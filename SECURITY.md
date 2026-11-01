@@ -29,6 +29,32 @@ describes what that protects against and what it doesn't. Protocol details are i
   (and password) can call themselves anything.
 - **A compromised PC.** If malware runs on the host's or a member's computer, it can listen in.
 
+## What other people in a room can and can't do
+
+Encryption keeps outsiders out. This section is about the people you let in, including
+someone running a modified copy of mæla.
+
+**Nothing in a room can make your mæla act on its own.** Nobody can start your screen share,
+open, save or run files on your PC, change your settings, or turn your mic on. Every action
+needs a click from you. Other members can only send data, which mæla checks and then shows
+or plays; it is never treated as a file or a command.
+
+| Someone in your room can… | Can they? | Notes |
+|---|---|---|
+| Hear you, read your messages in channels they're in or have open | Yes | That's what a room is for. |
+| See your display name, profile picture and status | Yes | Only what you chose to share. |
+| See your IP address | **Host only** | Members connect to the host, never to each other. (Screen sharing, when it arrives, will connect sharer and viewer directly and say so first.) |
+| See your Windows username, file names or folders | No | Never sent. Your display name starts as your Windows account name; change it in Settings. |
+| Get the location or camera details from your profile picture | No | Your PC turns the picture into an 80×80 pixel copy; only those pixels are sent. |
+| Send you a booby-trapped image | No | Pictures arrive as plain pixels. mæla never runs an image decoder on anything another person sent. |
+| Crash or freeze your mæla with bad data | Designed not to | Every message type has size limits and strict checks; bad data is dropped. `tests/ProfileTests.cs` and `tests/SecurityTests.cs` send random, oversized, inconsistent and "zip bomb" data at a real room on every build. |
+| Flood the room | Limited | Chat and profile changes are rate-limited per person; the host can kick or ban. |
+| Pretend to be the host | No | The host's key is checked against the room code. |
+| Host your saved room themselves | No | Only the PC holding that room's key can host it, and that key never leaves it. |
+
+The **host** can additionally move, kick and ban people, create, rename and delete channels,
+and (as above) hear and read everything in their room.
+
 ## Keys and secrets on disk
 
 - Each hosted saved room has a long-term X25519 key. It is what keeps the room's code the same
@@ -45,6 +71,8 @@ describes what that protects against and what it doesn't. Protocol details are i
   source is refused. Files are checked again on every launch, and a file that changes on disk
   is ignored.
 - These downloads are images only. The only code mæla ever downloads is its own update (below).
+- First-run setup lists everything mæla uses or downloads, with licenses, before anything is
+  fetched. Nothing else is downloaded without asking.
 
 ## Automatic updates
 
@@ -61,6 +89,8 @@ describes what that protects against and what it doesn't. Protocol details are i
   including the 1,000-iteration test. HKDF is checked against RFC 5869.
 - `tests/SecurityTests.cs` attacks a real host over the network (eavesdropping, wrong keys,
   wrong passwords, forged, bit-flipped and replayed packets) on every CI run.
+- `tests/ProfileTests.cs` plays a hostile member: 20,000 random profiles, decompression bombs,
+  oversized and inconsistent chunks, and floods. None may be stored or crash anyone.
 - This code has not had an independent security audit.
 
 ## Reporting a problem

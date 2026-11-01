@@ -6,7 +6,7 @@
 
 **mæla** is a lightweight self-hosted Windows voice-room app. One person hosts, friends join with a short room code, and the host relays voice directly without accounts or a permanent central service.
 
-Current release: **0.7.2**. Open source under the MIT License.
+Current release: **0.8.0**. Open source under the MIT License.
 
 ## Highlights
 
@@ -19,11 +19,12 @@ Current release: **0.7.2**. Open source under the MIT License.
 - Room codes that verify the host's identity, such as `M-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX`
 - Opus voice that only sends when you speak (voice detection ignores typing and clicks): roughly 60 kbps per person talking, nothing while quiet
 - Saved rooms with online/offline probing
-- Multiple voice channels inside a room, each with its own text chat
+- Voice channels with their own text chat, plus chat-only channels; one click opens a chat, double-click joins voice
+- Profile cards with a picture and status line (pictures are shared as plain pixels, never files)
 - Discord-style sidebar showing who is in which channel, who's speaking, muted or deafened
 - Colour emoji, reactions, an emoji picker and message search
 - Mute, deafen, live ping, a background-noise and key-click filter, automatic mic level and gentle sound effects
-- Lobby state with no voice transmission
+- Leave voice but stay in the room to keep chatting; Disconnect to leave it
 - Runs in the system tray when closed (mute, deafen, leave or quit from the tray icon); hosts can keep the room online there
 - Per-user local volume and mute
 - Built-in acoustic echo cancellation, so speakers work without a headset

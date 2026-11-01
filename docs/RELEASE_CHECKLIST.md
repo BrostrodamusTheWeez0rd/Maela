@@ -43,5 +43,11 @@ Before tagging a public build:
       without a duplicate of you in the member list.
 - [ ] Quitting the host (tray > Stop room and quit) disconnects members within a second.
 - [ ] With a frozen copy running, opening mæla again closes it and starts normally.
+- [ ] One click on a channel opens its chat; double-click joins voice; Leave voice keeps you
+      in the room and off the member list; Disconnect leaves; hosts get "Stop room".
+- [ ] Hosts can create a chat-only channel; nobody can join it for voice; it survives re-hosting.
+- [ ] Setting a profile picture and status shows on your card, in the sidebar and in chat for
+      everyone; the card's volume and mute work; host Move/Kick/Ban work from the card.
+- [ ] First-run setup shows "What mæla uses".
 - [ ] Settings > Licenses shows the MIT license and third-party notices.
 - [ ] `package_release.cmd` produces the expected release ZIP.
