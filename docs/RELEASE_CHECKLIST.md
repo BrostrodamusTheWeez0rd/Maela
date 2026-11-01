@@ -13,6 +13,10 @@ Before tagging a public build:
 - [ ] Saved rooms survive restart; each is probed once at startup (not repeatedly), and "Check if online" refreshes one.
 - [ ] Rooms saved by the previous version convert on first launch: `rooms-v2.txt` is gone, `rooms-v3.dat` isn't readable, and every room is still listed.
 - [ ] A `rooms-v3.dat` replaced with junk shows the "couldn't be opened" warning and is kept as `rooms-v3.unreadable`.
+- [ ] Friends between two machines on different networks: first-time notice, copy a code, send a request, accept, chat both ways; nothing can be sent before accepting.
+- [ ] Friend statuses: Away and Busy show to friends; Busy makes no sound; Offline shows as offline and messages arrive after coming back.
+- [ ] Friends and queued messages survive restarting both machines; pasting a friend's new code updates them with no new request.
+- [ ] Friends window looks right in each theme, and blocking and removing work from the right-click menu.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.
 - [ ] Audio is only delivered inside the current voice channel.

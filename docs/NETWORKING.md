@@ -141,6 +141,51 @@ authentication, arrives twice, or is older than the 1,024-packet replay window.
 - WELCOME carries the channel to enter (4 bytes): the member's previous channel when they are
   coming back, otherwise #1. Older clients ignore it and join #1.
 
+## Friends
+
+Friends don't use rooms or the wire protocol above. Each person who appears online runs a small
+listener on its own UDP port. It has no members, channels or relay.
+
+```text
+F-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX
+```
+
+A friend code is 25 bytes, scrambled and Base32-encoded: version (1), IPv4 address (4), UDP port
+(2), a fingerprint of the person's X25519 key (16) and CRC-16 (2). The key is the account; the
+address only says where they were.
+
+Every datagram starts with magic `MFR1` (4) and a type (1).
+
+| Type | Direction | Contents |
+|---|---|---|
+| 1 HELLO | initiator → responder | session id (4), ephemeral key (32), gate (16), random padding to 160 bytes |
+| 2 REPLY | responder → initiator | both session ids (8), ephemeral key (32), encrypted static key (56) |
+| 3 FINISH | initiator → responder | session id (4), encrypted static key (56) |
+| 4 DATA | both | receiver's session id (4), counter (8), AES-256-CTR ciphertext, HMAC-SHA256 tag (16) |
+
+- The handshake is the Noise XX pattern with X25519 and HKDF-SHA256. The initiator checks the
+  responder's key against the code's fingerprint; the responder looks the initiator's key up in
+  its own list.
+- The gate is an HMAC-SHA256 of the ephemeral key, keyed by the responder's fingerprint. Without
+  it there is no reply, so the listener can't be discovered by scanning. Listeners also limit
+  handshakes to 10 per IP per 10 seconds.
+- Inside DATA: READY, PING (status, name, current code), REQUEST and ACCEPT (name, code), MESSAGE
+  (number, time, text), ACK and BYE.
+- A stranger's session accepts only REQUEST and never receives PING. ACCEPT counts only from the
+  exact key you sent a request to. If two people request each other, they become friends, because
+  each has already chosen the other's key.
+- Messages are numbered per direction, at most 400 characters, accepted strictly in order, resent
+  every second until acknowledged, and kept encrypted on the sender's PC until then. Receivers
+  take at most 30 messages per friend per 10 seconds; anything over is simply resent later.
+- PING goes to each friend every 15 seconds, which also keeps the path through a router open. A
+  friend is offline after BYE or 45 seconds of silence. Listeners try offline friends every 20
+  seconds, at their announced address and the one they last sent from.
+- A changed address reaches friends in the next PING. If both people's addresses change while
+  they're apart, nothing can find them: either of them pastes the other's current code, and the
+  connection updates both. mæla deliberately has no server or DHT lookup.
+- If neither router accepts incoming connections (for example, both behind CGNAT), friends may
+  not be able to connect at all.
+
 ## Voice
 
 - Opus at 48 kHz mono, 20 ms frames, 32 kbps VBR, with in-band forward error correction.

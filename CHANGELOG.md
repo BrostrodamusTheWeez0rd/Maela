@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Friends.** Everyone gets a friend code. Paste someone's code to send a request; once they
+  accept, click them to chat. Your encryption key is your account, so a new IP address never ends
+  a friendship. There are no accounts and no server: messages go directly between your two PCs,
+  and wait encrypted on the sender's PC until you're both online.
+- **Online, Away, Busy, Offline.** Busy still delivers messages but makes no sound. Offline closes
+  the listener completely. Friends stay off until you first choose to go online.
 - **Saved rooms are fully encrypted on disk.** Room names, channels and room codes, which contain
   the host's address, used to be readable in `rooms-v2.txt`. They now live in an encrypted
   `rooms-v3.dat`, and your existing rooms convert by themselves on first launch. Older copies of

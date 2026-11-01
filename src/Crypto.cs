@@ -505,6 +505,24 @@ namespace Maela
             }
         }
 
+        /// <summary>Moves a file that can't be used out of the way without destroying it.</summary>
+        public static bool SetAside(string path)
+        {
+            try
+            {
+                string target = System.IO.Path.ChangeExtension(path, ".unreadable");
+                int n = 1;
+                while (System.IO.File.Exists(target))
+                    target = System.IO.Path.ChangeExtension(path, ".unreadable" + n++);
+                System.IO.File.Move(path, target);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         /// <summary>Replaces the file in one step, so a crash leaves the old or the new contents, never half.</summary>
         public static void Write(string path, byte[] data)
         {

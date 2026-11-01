@@ -58,6 +58,37 @@ or plays; it is never treated as a file or a command.
 The **host** can additionally move, kick and ban people, create, rename and delete channels,
 and (as above) hear and read everything in their room.
 
+## Friends
+
+Friends stay off until you first choose a status other than Offline. While you're online, mæla
+runs a small listener on your PC and asks your router to open a port for it.
+
+| Threat | Protected? | How |
+|---|---|---|
+| Someone messaging you without being accepted | **Yes** | Your list decides, and only your own click on Accept changes it. A modified copy can't accept for you: your PC never takes anyone's word for it. `tests/FriendTests.cs` tries it. |
+| Someone pretending to be your friend | **Yes** | Your key is your account. Both sides prove they hold their key on every connection (the Noise XX pattern), so copying a name or code isn't enough. |
+| A fake listener at your friend's address | **Yes** | A friend code carries a 128-bit fingerprint of the person's key. Anything else is refused. |
+| A friend reading your chat with someone else | **Yes** | Each chat has its own keys and file, and the listener has no way to pass anything between people. Friends can't see each other. |
+| Someone scanning the internet for mæla | **Yes** | Without your code, the listener doesn't reply at all. |
+| Reading your messages on the network | **Yes** | Direct and end-to-end encrypted, with forward secrecy. Nothing else relays or stores them. |
+
+What it doesn't protect:
+
+- **Anyone with your friend code can find your IP address and port.** There's no server to look it
+  up, so the code has to contain it. They can also send you a request. Share it like a phone
+  number.
+- **Friends can see your IP address and status,** because your PCs talk directly.
+- **Your PC is a little more visible.** While online, your listener sends a small encrypted check
+  to each friend regularly. Someone watching your network can see that traffic and who it goes
+  to, but not what's in it.
+- **If your router can't give mæla your public address,** mæla asks `api.ipify.org`, as it does
+  for hosting a room. That service sees your IP address. After that, mæla only asks your router.
+- **Offline really is off, but it looks like anything else.** Friends can't tell Offline from a
+  powered-off PC or a changed address. A message you're sent while Offline stays on the sender's
+  PC, so nothing arrives unless you're both online at the same time.
+- **Lose your Windows account's keys and you lose your account.** There is no recovery without a
+  server. Friends would need to add your new code.
+
 ## Keys and secrets on disk
 
 - Your saved rooms are stored in `%AppData%\Maela\rooms-v3.dat`. The whole file is encrypted with
@@ -72,6 +103,8 @@ and (as above) hear and read everything in their room.
   converted and deleted on first launch. Deleting doesn't scrub a file from a drive or from backups.
 - Because only your Windows account can decrypt the file, saved rooms don't move to another PC or
   survive reinstalling Windows. mæla keeps a file it can't open as `rooms-v3.unreadable` and says so.
+- Your friend key, friends list, their last known addresses and queued messages are in
+  `friends-v1.dat`, and each chat is in its own `friend-<id>.dat`. All are encrypted the same way.
 - `settings.txt` is not encrypted. It holds preferences such as your display name and status.
 
 ## Downloaded assets

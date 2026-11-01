@@ -141,6 +141,13 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Friends (including hostile packets) ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\FriendTests.exe" /main:Maela.Tests.FriendTests %REFS% %ENGINE% "tests\FriendTests.cs"
+if errorlevel 1 exit /b 1
+"obj\FriendTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Saved rooms on disk ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\StorageTests.exe" /main:Maela.Tests.StorageTests %REFS% %ENGINE% "tests\StorageTests.cs"
 if errorlevel 1 exit /b 1

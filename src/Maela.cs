@@ -361,7 +361,7 @@ namespace Maela
                         DeleteQuietly(unencrypted);
                         return Parse(Encoding.UTF8.GetString(data).Split('\n'));
                     }
-                    if (!SetAside(path))
+                    if (!EncryptedFile.SetAside(path))
                         _saveBlocked = true;
                     if (!File.Exists(unencrypted))
                     {
@@ -395,23 +395,6 @@ namespace Maela
                 catch { }
             }
             return rooms;
-        }
-
-        private static bool SetAside(string path)
-        {
-            try
-            {
-                string target = Path.ChangeExtension(path, ".unreadable");
-                int n = 1;
-                while (File.Exists(target))
-                    target = Path.ChangeExtension(path, ".unreadable" + n++);
-                File.Move(path, target);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
         }
 
         private static void DeleteQuietly(string path)
@@ -563,6 +546,8 @@ namespace Maela
         public string Status = String.Empty;
         public bool AllowDirectStreams = true; // Off: streams go through the host, so viewers don't learn your IP.
         public bool StreamNoticeShown;
+        public FriendStatus FriendStatus = FriendStatus.Offline; // Friends stay off until you choose to go online.
+        public bool FriendsNoticeShown;
         public StreamDecodeMode StreamDecode = StreamDecodeMode.Automatic;
         public int ShareHeight = 1080;
         public int ShareFps = 60;
@@ -590,6 +575,8 @@ namespace Maela
             p.Status = Status;
             p.AllowDirectStreams = AllowDirectStreams;
             p.StreamNoticeShown = StreamNoticeShown;
+            p.FriendStatus = FriendStatus;
+            p.FriendsNoticeShown = FriendsNoticeShown;
             p.StreamDecode = StreamDecode;
             p.ShareHeight = ShareHeight;
             p.ShareFps = ShareFps;
@@ -688,6 +675,13 @@ namespace Maela
                         p.ShareAudio = value != "0";
                     else if (key == "streamnotice")
                         p.StreamNoticeShown = value == "1";
+                    else if (key == "friendstatus")
+                    {
+                        byte v;
+                        if (Byte.TryParse(value, out v) && v <= (byte)FriendStatus.Busy) p.FriendStatus = (FriendStatus)v;
+                    }
+                    else if (key == "friendsnotice")
+                        p.FriendsNoticeShown = value == "1";
                     else if (key == "streamdecode")
                         p.StreamDecode = value == "1" ? StreamDecodeMode.Always : value == "2" ? StreamDecodeMode.Never : StreamDecodeMode.Automatic;
                     else if (key == "shareheight")
@@ -742,6 +736,8 @@ namespace Maela
                     "status=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(p.Status ?? String.Empty)),
                     "directstreams2=" + (p.AllowDirectStreams ? "1" : "0"),
                     "streamnotice=" + (p.StreamNoticeShown ? "1" : "0"),
+                    "friendstatus=" + (byte)p.FriendStatus,
+                    "friendsnotice=" + (p.FriendsNoticeShown ? "1" : "0"),
                     "streamdecode=" + (int)p.StreamDecode,
                     "shareheight=" + p.ShareHeight,
                     "sharefps=" + p.ShareFps,
@@ -862,7 +858,7 @@ namespace Maela
             return true;
         }
 
-        private static string Clean(string code)
+        internal static string Clean(string code)
         {
             if (String.IsNullOrWhiteSpace(code))
                 return String.Empty;
@@ -880,7 +876,7 @@ namespace Maela
         }
 
         /// <summary>CRC-16/CCITT-FALSE. Catches every single-character typo and almost all others.</summary>
-        private static ushort Crc16(byte[] data, int count)
+        internal static ushort Crc16(byte[] data, int count)
         {
             ushort crc = 0xFFFF;
             int i;
@@ -894,7 +890,7 @@ namespace Maela
             return crc;
         }
 
-        private static string Base32Encode(byte[] data)
+        internal static string Base32Encode(byte[] data)
         {
             StringBuilder result = new StringBuilder();
             uint buffer = 0;
@@ -915,7 +911,7 @@ namespace Maela
             return result.ToString();
         }
 
-        private static bool TryBase32Decode(string value, out byte[] data)
+        internal static bool TryBase32Decode(string value, out byte[] data)
         {
             data = null;
             if (String.IsNullOrEmpty(value))
@@ -1016,6 +1012,20 @@ namespace Maela
             _serviceType = serviceType;
             _externalPort = externalPort;
             ExternalIp = externalIp;
+        }
+
+        /// <summary>Asks the router for your current public address. Only your router is contacted.</summary>
+        public string RefreshExternalIp()
+        {
+            if (_controlUrl == null || _disposed)
+                return null;
+            string response;
+            if (!Soap(_controlUrl, _serviceType, "GetExternalIPAddress", String.Empty, out response))
+                return null;
+            string ip = ExtractSoapValue(response, "NewExternalIPAddress");
+            if (!String.IsNullOrWhiteSpace(ip))
+                ExternalIp = ip;
+            return ip;
         }
 
         public static UpnpPortMapping TryCreate(int port, string internalClient, out string failure)

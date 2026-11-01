@@ -122,6 +122,7 @@ namespace Maela
             _actionPanel.PrimaryButton.Click += RoomActionClicked;
             _actionPanel.SecondaryButton.Click += delegate { StopEngine(); };
             cardHost.Controls.Add(_actionPanel);
+            BuildFriendsBar();
             _sidebar.Controls.Add(_userBar); // Added after the card so it docks at the very bottom.
 
             _roomHeader.Dock = DockStyle.Top;

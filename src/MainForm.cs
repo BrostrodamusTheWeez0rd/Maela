@@ -70,6 +70,7 @@ namespace Maela
             _savedRooms.AddRange(SavedRoomStore.Load());
 
             BuildInterface();
+            InitFriends();
             RebuildRoomList();
             UpdateSelectedRoomUi();
             UpdateMuteButton();
@@ -120,6 +121,7 @@ namespace Maela
                 }
                 if (SavedRoomStore.LoadFailed)
                     MessageBox.Show(this, "Your saved rooms couldn't be opened. This usually happens after reinstalling Windows or on a different Windows account.\r\n\r\nThe old file has been kept, and mæla is starting a new list. To get back into a room, ask its host for the room code.", "Saved rooms", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ResumeFriends();
                 VerifyDownloadsInBackground();
                 // Once per version (and after every update): make Windows reload mæla's icon,
                 // so desktops and shortcuts don't keep showing an older one.
@@ -1492,6 +1494,7 @@ namespace Maela
             _updateTimer.Stop();
             Interlocked.Increment(ref _presenceGeneration);
             StopEngine();
+            ShutdownFriends();
             PreferencesStore.Save(_preferences);
             SavedRoomStore.Save(_savedRooms);
             _notifyIcon.Visible = false;
@@ -1524,6 +1527,8 @@ namespace Maela
                 menu.Items.Add(deafen);
                 menu.Items.Add("Leave voice", null, delegate { LeaveClicked(null, EventArgs.Empty); });
             }
+            menu.Items.Add(new ToolStripSeparator());
+            AddStatusItems(menu.Items);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_engine != null && _engine.IsRunning && _engine.IsHost ? "Stop room and quit" : "Quit m\u00E6la", null, delegate { QuitApp(); });
         }
