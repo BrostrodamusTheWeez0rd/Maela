@@ -312,7 +312,24 @@ namespace Maela
 
     internal static class SavedRoomStore
     {
+        private static readonly object _fileLock = new object();
+        private static bool _saveBlocked; // The rooms file couldn't be read or moved aside; saving would destroy it.
+
+        /// <summary>Tests keep their files away from the real saved rooms.</summary>
+        internal static string FolderForTests;
+
+        /// <summary>True when the last Load found a rooms file it can't decrypt. The file is kept.</summary>
+        public static bool LoadFailed { get; private set; }
+
         private static string FilePath
+        {
+            get
+            {
+                return Path.Combine(GetFolder(), "rooms-v3.dat");
+            }
+        }
+
+        private static string UnencryptedFilePath
         {
             get
             {
@@ -322,14 +339,92 @@ namespace Maela
 
         public static List<SavedRoom> Load()
         {
+            lock (_fileLock)
+            {
+                LoadFailed = false;
+                _saveBlocked = false;
+                RemoveOldRoomFiles();
+                string path = FilePath;
+                string unencrypted = UnencryptedFilePath;
+                if (File.Exists(path))
+                {
+                    byte[] data;
+                    try { data = EncryptedFile.Read(path); }
+                    catch
+                    {
+                        _saveBlocked = true;
+                        return new List<SavedRoom>();
+                    }
+                    if (data != null)
+                    {
+                        // An older file is only still here if a conversion was interrupted.
+                        DeleteQuietly(unencrypted);
+                        return Parse(Encoding.UTF8.GetString(data).Split('\n'));
+                    }
+                    if (!SetAside(path))
+                        _saveBlocked = true;
+                    if (!File.Exists(unencrypted))
+                    {
+                        LoadFailed = true;
+                        return new List<SavedRoom>();
+                    }
+                }
+                return File.Exists(unencrypted) ? ConvertUnencryptedFile(unencrypted) : new List<SavedRoom>();
+            }
+        }
+
+        /// <summary>The old file is deleted only after the encrypted copy has been read back.</summary>
+        private static List<SavedRoom> ConvertUnencryptedFile(string unencrypted)
+        {
+            string[] lines;
+            try { lines = File.ReadAllLines(unencrypted); }
+            catch
+            {
+                _saveBlocked = true;
+                return new List<SavedRoom>();
+            }
+            List<SavedRoom> rooms = Parse(lines);
+            if (Save(rooms))
+            {
+                try
+                {
+                    byte[] check = EncryptedFile.Read(FilePath);
+                    if (check != null && Parse(Encoding.UTF8.GetString(check).Split('\n')).Count == rooms.Count)
+                        DeleteQuietly(unencrypted);
+                }
+                catch { }
+            }
+            return rooms;
+        }
+
+        private static bool SetAside(string path)
+        {
+            try
+            {
+                string target = Path.ChangeExtension(path, ".unreadable");
+                int n = 1;
+                while (File.Exists(target))
+                    target = Path.ChangeExtension(path, ".unreadable" + n++);
+                File.Move(path, target);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void DeleteQuietly(string path)
+        {
+            try { File.Delete(path); }
+            catch { }
+        }
+
+        private static List<SavedRoom> Parse(string[] lines)
+        {
             List<SavedRoom> result = new List<SavedRoom>();
             try
             {
-                RemoveOldRoomFiles();
-                string loadPath = FilePath;
-                if (!File.Exists(loadPath))
-                    return result;
-                string[] lines = File.ReadAllLines(loadPath);
                 int i;
                 for (i = 0; i < lines.Length; i++)
                 {
@@ -379,29 +474,40 @@ namespace Maela
             return result;
         }
 
-        public static void Save(IList<SavedRoom> rooms)
+        public static bool Save(IList<SavedRoom> rooms)
         {
-            try
+            lock (_fileLock)
             {
-                string folder = GetFolder();
-                Directory.CreateDirectory(folder);
-                List<string> lines = new List<string>();
-                int i;
-                for (i = 0; i < rooms.Count; i++)
+                if (_saveBlocked)
+                    return false;
+                try
                 {
-                    SavedRoom room = rooms[i];
-                    string channelText = room.ChannelNames == null ? String.Empty : String.Join("\n", room.ChannelNames.ToArray());
-                    string key = room.HostKey == null ? String.Empty : SecretStore.Protect(room.HostKey);
-                    string password = String.IsNullOrEmpty(room.Password) ? String.Empty : SecretStore.Protect(Encoding.UTF8.GetBytes(room.Password));
-                    lines.Add((room.Owned ? "1" : "0") + "|" + room.PreferredPort + "|" + Encode(room.Name) + "|" + Encode(room.Invite) + "|" + (room.KeepAlive ? "1" : "0") + "|" + Encode(channelText) + "|" + key + "|" + password);
+                    string folder = GetFolder();
+                    Directory.CreateDirectory(folder);
+                    List<string> lines = new List<string>();
+                    int i;
+                    for (i = 0; i < rooms.Count; i++)
+                    {
+                        SavedRoom room = rooms[i];
+                        string channelText = room.ChannelNames == null ? String.Empty : String.Join("\n", room.ChannelNames.ToArray());
+                        string key = room.HostKey == null ? String.Empty : SecretStore.Protect(room.HostKey);
+                        string password = String.IsNullOrEmpty(room.Password) ? String.Empty : SecretStore.Protect(Encoding.UTF8.GetBytes(room.Password));
+                        lines.Add((room.Owned ? "1" : "0") + "|" + room.PreferredPort + "|" + Encode(room.Name) + "|" + Encode(room.Invite) + "|" + (room.KeepAlive ? "1" : "0") + "|" + Encode(channelText) + "|" + key + "|" + password);
+                    }
+                    EncryptedFile.Write(FilePath, Encoding.UTF8.GetBytes(String.Join("\n", lines.ToArray())));
+                    return true;
                 }
-                File.WriteAllLines(FilePath, lines.ToArray());
+                catch
+                {
+                    return false;
+                }
             }
-            catch { }
         }
 
         private static string GetFolder()
         {
+            if (FolderForTests != null)
+                return FolderForTests;
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Maela");
         }
 

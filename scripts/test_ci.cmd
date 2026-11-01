@@ -141,6 +141,13 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Saved rooms on disk ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\StorageTests.exe" /main:Maela.Tests.StorageTests %REFS% %ENGINE% "tests\StorageTests.cs"
+if errorlevel 1 exit /b 1
+"obj\StorageTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
 echo === Downloads (official Twemoji source, verified) ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\AssetTests.exe" /main:Maela.Tests.AssetTests %REFS% %ENGINE% "tests\AssetTests.cs"
 if errorlevel 1 exit /b 1

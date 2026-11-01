@@ -60,11 +60,19 @@ and (as above) hear and read everything in their room.
 
 ## Keys and secrets on disk
 
+- Your saved rooms are stored in `%AppData%\Maela\rooms-v3.dat`. The whole file is encrypted with
+  Windows DPAPI, including names, channels and room codes (which contain the host's address). The
+  key comes from your Windows account, not from mæla's source code, so a copy of the file can't be
+  read elsewhere. Programs running under your own Windows login can still ask Windows to decrypt it.
 - Each hosted saved room has a long-term X25519 key. It is what keeps the room's code the same
-  every time you host. It is stored in `%AppData%\Maela\rooms-v2.txt`, encrypted with Windows
-  DPAPI so only your Windows account can read it.
+  every time you host. It is encrypted a second time inside that file.
 - Room passwords (yours as a host, or the one you were given) are stored the same way.
 - If a host key is ever exposed, delete the room and host it again to get a new key and code.
+- Copies of the older `rooms-v2.txt`, which kept names and room codes in readable form, are
+  converted and deleted on first launch. Deleting doesn't scrub a file from a drive or from backups.
+- Because only your Windows account can decrypt the file, saved rooms don't move to another PC or
+  survive reinstalling Windows. mæla keeps a file it can't open as `rooms-v3.unreadable` and says so.
+- `settings.txt` is not encrypted. It holds preferences such as your display name and status.
 
 ## Downloaded assets
 

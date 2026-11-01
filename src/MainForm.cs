@@ -118,6 +118,8 @@ namespace Maela
                     _chatViewKey = String.Empty;
                     RefreshShell(_engine);
                 }
+                if (SavedRoomStore.LoadFailed)
+                    MessageBox.Show(this, "Your saved rooms couldn't be opened. This usually happens after reinstalling Windows or on a different Windows account.\r\n\r\nThe old file has been kept, and mæla is starting a new list. To get back into a room, ask its host for the room code.", "Saved rooms", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 VerifyDownloadsInBackground();
                 // Once per version (and after every update): make Windows reload mæla's icon,
                 // so desktops and shortcuts don't keep showing an older one.

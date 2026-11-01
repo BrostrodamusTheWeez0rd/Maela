@@ -479,4 +479,54 @@ namespace Maela
             }
         }
     }
+
+    /// <summary>
+    /// A whole file encrypted with DPAPI, so nothing in it is readable on disk. The protection
+    /// comes from the Windows account's own keys, not from anything in this source code.
+    /// </summary>
+    internal static class EncryptedFile
+    {
+        private static readonly byte[] Entropy = System.Text.Encoding.ASCII.GetBytes("maela file v1");
+
+        /// <summary>
+        /// Returns null if the contents can't be decrypted (damaged, or from another account).
+        /// Throws if the file can't be read at all, which says nothing about its contents.
+        /// </summary>
+        public static byte[] Read(string path)
+        {
+            byte[] stored = System.IO.File.ReadAllBytes(path);
+            try
+            {
+                return ProtectedData.Unprotect(stored, Entropy, DataProtectionScope.CurrentUser);
+            }
+            catch (CryptographicException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>Replaces the file in one step, so a crash leaves the old or the new contents, never half.</summary>
+        public static void Write(string path, byte[] data)
+        {
+            byte[] stored = ProtectedData.Protect(data, Entropy, DataProtectionScope.CurrentUser);
+            string temp = path + ".tmp";
+            try
+            {
+                using (System.IO.FileStream file = new System.IO.FileStream(temp, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.None))
+                {
+                    file.Write(stored, 0, stored.Length);
+                    file.Flush(true);
+                }
+                if (System.IO.File.Exists(path))
+                    System.IO.File.Replace(temp, path, null);
+                else
+                    System.IO.File.Move(temp, path);
+            }
+            finally
+            {
+                try { System.IO.File.Delete(temp); }
+                catch { }
+            }
+        }
+    }
 }

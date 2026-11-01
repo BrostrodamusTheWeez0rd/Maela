@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Saved rooms are fully encrypted on disk.** Room names, channels and room codes, which contain
+  the host's address, used to be readable in `rooms-v2.txt`. They now live in an encrypted
+  `rooms-v3.dat`, and your existing rooms convert by themselves on first launch. Older copies of
+  mæla won't see your rooms afterwards.
+- **Saved rooms are harder to lose.** A crash during a save can't damage the file, and a file mæla
+  can't open is kept, with a warning, instead of being overwritten.
+
 ## 0.10.0 - Graphics card, sound and steadier streams
 
 - **Share your PC's sound.** Share sound, on by default, sends what your programs play along with
