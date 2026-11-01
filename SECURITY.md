@@ -80,8 +80,8 @@ and (as above) hear and read everything in their room.
 
 - Updates are only downloaded over HTTPS from this repository's own GitHub Releases.
 - The download must match the published `Maela.exe.sha256` and report the expected version, or it is discarded.
-- The checksum protects against corrupted or tampered downloads in transit. It is hosted alongside the exe, so it does **not** protect against someone who gains write access to the repository or its releases. Protect the GitHub account with two-factor authentication. Code-signing releases would be the next step.
-
+- The checksum protects against corrupted or tampered downloads in transit. It is hosted alongside the exe, so it does **not** protect against someone who gains write access to the repository or its releases.
+  
 ## Implementation notes
 
 - Cryptography is built from standard primitives only: X25519 (RFC 7748), HKDF-SHA256
