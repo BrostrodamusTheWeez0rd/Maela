@@ -17,6 +17,8 @@ Before tagging a public build:
 - [ ] Friend statuses: Away and Busy show to friends; Busy makes no sound; Offline shows as offline and messages arrive after coming back.
 - [ ] Friends and queued messages survive restarting both machines; pasting a friend's new code updates them with no new request.
 - [ ] Backup and restore: back up on one PC, restore on another with the right password (a wrong one is refused), a friend pastes the new code, and messages flow both ways with no new request.
+- [ ] Friend calls between two machines on different networks: ring, accept, talk both ways, and hanging up on either side ends it for both. Declining, nobody answering and Busy (a missed call in the chat) all behave.
+- [ ] A call from inside a room asks first. Password rooms work with both sides on this version, and an older client can still join an updated host.
 - [ ] Friends window looks right in each theme, and blocking and removing work from the right-click menu.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.

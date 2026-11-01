@@ -226,6 +226,15 @@ namespace Maela
         }
     }
 
+    internal enum FriendCallEvent
+    {
+        Incoming,    // A friend is calling you.
+        HostNow,     // It's your turn to start the private room.
+        JoinRoom,    // Their private room is ready, and you asked for this call.
+        Declined,
+        Ended        // Cancelled, or nobody answered in time.
+    }
+
     /// <summary>What the UI sees of one person. A copy: changing it changes nothing.</summary>
     internal sealed class FriendInfo
     {
@@ -421,6 +430,14 @@ namespace Maela
         private const byte InnerMessage = 4;
         private const byte InnerAck = 5;
         private const byte InnerBye = 6;
+        private const byte InnerCall = 7;
+
+        private const byte CallInvite = 1;
+        private const byte CallAccept = 2;
+        private const byte CallRoomReady = 3;
+        private const byte CallJoining = 4;
+        private const byte CallDecline = 5;
+        private const byte CallCancel = 6;
 
         private static readonly byte[] ProtocolLabel = Encoding.ASCII.GetBytes("maela/friend/1 XX X25519 HKDF-SHA256 AES256-CTR HMAC-SHA256");
 
@@ -429,6 +446,7 @@ namespace Maela
         internal int KeepAliveMs = 15000;
         internal int SessionTimeoutMs = 45000;
         internal int ResendMs = 1000;
+        internal int CallRingSeconds = 30;
 
         private readonly object _lock = new object();
         private readonly string _folder;
@@ -451,6 +469,14 @@ namespace Maela
         private int _version;
         private uint _incarnation; // Changes on every restore, so friends know to start numbering again.
         private bool _backedUp;
+        private ActiveCall _call;
+        private ulong _lastEndedCall;
+
+        /// <summary>
+        /// Raised on the service's thread: event, friend id, then a room code and password for
+        /// JoinRoom. Nothing here joins anything; the app acts only on a call you started or accepted.
+        /// </summary>
+        public event Action<FriendCallEvent, string, string, string> CallEvent;
 
         /// <summary>Raised on the service's thread when someone sends you a message.</summary>
         public event Action<string, string> MessageReceived;
@@ -573,6 +599,7 @@ namespace Maela
                 _sessions.Clear();
                 _handshakes.Clear();
                 _helloLimits.Clear();
+                _call = null;
                 foreach (Person person in _people.Values)
                 {
                     person.Current = null;
@@ -626,6 +653,270 @@ namespace Maela
         public void Dispose()
         {
             Stop();
+        }
+
+        /// <summary>Your display name changed: friends who can hear you learn it straight away.</summary>
+        public void SetName(string name)
+        {
+            lock (_lock)
+            {
+                string clean = CleanName(name);
+                if (clean == _name)
+                    return;
+                _name = clean;
+                BroadcastPing();
+            }
+        }
+
+        // ----- Calls -----
+
+        /// <summary>Starts ringing a friend. canHost: your router accepts incoming connections.</summary>
+        public bool StartCall(string id, bool canHost)
+        {
+            lock (_lock)
+            {
+                Person person;
+                if (_call != null || !_people.TryGetValue(id, out person) || person.State != FriendState.Friend || person.PeerStatus == FriendStatus.Offline)
+                    return false;
+                _call = new ActiveCall();
+                _call.Id = BitConverter.ToUInt64(CryptoUtil.Random(8), 0);
+                _call.FriendId = id;
+                _call.ExpiresUtc = DateTime.UtcNow.AddSeconds(CallRingSeconds);
+                _call.CanHost = canHost;
+                _call.Resend = CallPacket(CallInvite, _call.Id, new byte[] { (byte)(canHost ? 1 : 0) });
+                SendCall(person);
+                return true;
+            }
+        }
+
+        /// <summary>Only ever called from your own click on Accept.</summary>
+        public void AcceptCall(bool canHost)
+        {
+            FriendCallEvent next = FriendCallEvent.HostNow;
+            string friend = null;
+            lock (_lock)
+            {
+                if (_call == null || !_call.Incoming || _call.Answered)
+                    return;
+                _call.Answered = true;
+                _call.ExpiresUtc = DateTime.UtcNow.AddSeconds(CallRingSeconds);
+                friend = _call.FriendId;
+                Person person;
+                if (!_people.TryGetValue(friend, out person))
+                    return;
+                bool callerHosts = !canHost && _call.CallerCanHost;
+                _call.WaitingForRoom = callerHosts;
+                _call.Resend = CallPacket(CallAccept, _call.Id, new byte[] { (byte)(callerHosts ? 1 : 0) });
+                SendCall(person);
+                if (callerHosts)
+                    return; // They host; you wait for their room.
+            }
+            RaiseCall(next, friend, null, null);
+        }
+
+        /// <summary>Your private room is up: gives your friend what they need to join it.</summary>
+        public void CallRoomIsReady(string roomCode, string password)
+        {
+            lock (_lock)
+            {
+                Person person;
+                if (_call == null || !_people.TryGetValue(_call.FriendId, out person))
+                    return;
+                byte[] code = Encoding.ASCII.GetBytes(roomCode);
+                byte[] secret = Encoding.ASCII.GetBytes(password);
+                byte[] body = new byte[2 + code.Length + secret.Length];
+                body[0] = (byte)code.Length;
+                Buffer.BlockCopy(code, 0, body, 1, code.Length);
+                body[1 + code.Length] = (byte)secret.Length;
+                Buffer.BlockCopy(secret, 0, body, 2 + code.Length, secret.Length);
+                _call.Resend = CallPacket(CallRoomReady, _call.Id, body);
+                _call.Settled = true;
+                _call.ExpiresUtc = DateTime.UtcNow.AddSeconds(CallRingSeconds);
+                SendCall(person);
+            }
+        }
+
+        /// <summary>Declines, cancels or forgets the current call.</summary>
+        public void EndCall()
+        {
+            lock (_lock)
+            {
+                if (_call == null)
+                    return;
+                Person person;
+                if (_people.TryGetValue(_call.FriendId, out person) && person.Current != null && person.Current.Confirmed)
+                {
+                    byte[] bye = CallPacket(_call.Incoming && !_call.Answered ? CallDecline : CallCancel, _call.Id, new byte[0]);
+                    int i;
+                    for (i = 0; i < 3; i++)
+                        SendInner(person.Current, bye); // No acknowledgement, and UDP can drop one.
+                }
+                _lastEndedCall = _call.Id;
+                _call = null;
+            }
+        }
+
+        /// <summary>Adds "Missed call" to a friend's chat, with no sound of its own.</summary>
+        public void NoteMissedCall(string id)
+        {
+            lock (_lock)
+            {
+                Person person;
+                if (!_people.TryGetValue(id, out person) || person.State != FriendState.Friend)
+                    return;
+                FriendChatEntry entry = new FriendChatEntry();
+                entry.TimeUtc = DateTime.UtcNow;
+                entry.Text = "Missed call";
+                entry.Delivered = true;
+                ChatOf(person).Add(entry);
+                person.Unread++;
+                Save();
+                Bump();
+            }
+        }
+
+        private static byte[] CallPacket(byte kind, ulong id, byte[] body)
+        {
+            byte[] inner = new byte[10 + body.Length];
+            inner[0] = InnerCall;
+            inner[1] = kind;
+            Buffer.BlockCopy(BitConverter.GetBytes(id), 0, inner, 2, 8);
+            Buffer.BlockCopy(body, 0, inner, 10, body.Length);
+            return inner;
+        }
+
+        private void SendCall(Person person)
+        {
+            _call.LastSentUtc = DateTime.UtcNow;
+            if (_call.Resend != null && person.Current != null && person.Current.Confirmed)
+                SendInner(person.Current, _call.Resend);
+        }
+
+        private void RaiseCall(FriendCallEvent kind, string friend, string code, string password)
+        {
+            Action<FriendCallEvent, string, string, string> handler = CallEvent;
+            if (handler != null)
+                ThreadPool.QueueUserWorkItem(delegate { handler(kind, friend, code, password); });
+        }
+
+        private void TickCall(DateTime now)
+        {
+            if (_call == null)
+                return;
+            if (now > _call.ExpiresUtc)
+            {
+                string friend = _call.FriendId;
+                bool settled = _call.Settled;
+                _lastEndedCall = _call.Id;
+                _call = null;
+                // Once the room has been handed over, the ringing is done, not the call.
+                if (!settled)
+                    RaiseCall(FriendCallEvent.Ended, friend, null, null);
+                return;
+            }
+            if (_call.Resend != null && (now - _call.LastSentUtc).TotalMilliseconds >= ResendMs)
+            {
+                Person person;
+                if (_people.TryGetValue(_call.FriendId, out person))
+                    SendCall(person);
+            }
+        }
+
+        /// <summary>Friends only, and a room is only ever passed on for the call you're actually in.</summary>
+        private void HandleCall(Person person, byte[] inner)
+        {
+            if (person == null || person.State != FriendState.Friend || inner.Length < 10)
+                return;
+            byte kind = inner[1];
+            ulong id = BitConverter.ToUInt64(inner, 2);
+            if (id == _lastEndedCall)
+                return; // A resend of a call that's over.
+
+            if (kind == CallInvite)
+            {
+                if (inner.Length != 11)
+                    return;
+                if (_call != null)
+                {
+                    if (_call.Id != id && person.Current != null)
+                        SendInner(person.Current, CallPacket(CallDecline, id, new byte[0])); // Already in a call.
+                    return;
+                }
+                _call = new ActiveCall();
+                _call.Id = id;
+                _call.FriendId = person.Id;
+                _call.Incoming = true;
+                _call.CallerCanHost = inner[10] == 1;
+                _call.ExpiresUtc = DateTime.UtcNow.AddSeconds(CallRingSeconds);
+                RaiseCall(FriendCallEvent.Incoming, person.Id, null, null);
+                return;
+            }
+
+            if (_call == null || _call.Id != id || _call.FriendId != person.Id)
+                return; // Nothing you asked for: a friend can't make you join a room.
+
+            switch (kind)
+            {
+                case CallAccept:
+                    if (_call.Incoming || inner.Length != 11 || _call.Accepted)
+                        return;
+                    _call.Accepted = true;
+                    _call.Resend = null;
+                    _call.ExpiresUtc = DateTime.UtcNow.AddSeconds(CallRingSeconds);
+                    if (inner[10] == 1)
+                        RaiseCall(FriendCallEvent.HostNow, person.Id, null, null);
+                    else
+                        _call.WaitingForRoom = true;
+                    break;
+
+                case CallRoomReady:
+                    // On the caller's side the room also proves they answered, if Accept got lost.
+                    if (_call.Incoming && !_call.WaitingForRoom)
+                        return;
+                    _call.Accepted = true;
+                    string code;
+                    string password;
+                    if (!TryParseRoom(inner, out code, out password))
+                        return;
+                    if (person.Current != null)
+                        SendInner(person.Current, CallPacket(CallJoining, id, new byte[0]));
+                    if (_call.RoomPassedOn)
+                        return;
+                    _call.RoomPassedOn = true;
+                    _call.Settled = true;
+                    _call.Resend = null;
+                    _call.ExpiresUtc = DateTime.UtcNow.AddSeconds(CallRingSeconds);
+                    RaiseCall(FriendCallEvent.JoinRoom, person.Id, code, password);
+                    break;
+
+                case CallJoining:
+                    _call.Resend = null;
+                    break;
+
+                case CallDecline:
+                case CallCancel:
+                    _lastEndedCall = id;
+                    _call = null;
+                    RaiseCall(kind == CallDecline ? FriendCallEvent.Declined : FriendCallEvent.Ended, person.Id, null, null);
+                    break;
+            }
+        }
+
+        private static bool TryParseRoom(byte[] inner, out string code, out string password)
+        {
+            code = null;
+            password = null;
+            if (inner.Length < 12)
+                return false;
+            int codeLength = inner[10];
+            if (11 + codeLength + 1 > inner.Length || codeLength > 64)
+                return false;
+            int secretLength = inner[11 + codeLength];
+            if (12 + codeLength + secretLength != inner.Length || secretLength < 1 || secretLength > 64)
+                return false;
+            code = Encoding.ASCII.GetString(inner, 11, codeLength);
+            password = Encoding.ASCII.GetString(inner, 12 + codeLength, secretLength);
+            return RoomCode.IsValid(code);
         }
 
         // ----- What the UI can do -----
@@ -936,6 +1227,7 @@ namespace Maela
 
         private void Tick(DateTime now)
         {
+            TickCall(now);
             List<uint> stale = new List<uint>();
             foreach (KeyValuePair<uint, Handshake> pair in _handshakes)
             {
@@ -1280,6 +1572,7 @@ namespace Maela
                 case InnerPing: HandlePing(person, inner); break;
                 case InnerMessage: HandleMessage(person, inner); break;
                 case InnerAck: HandleAck(person, inner); break;
+                case InnerCall: HandleCall(person, inner); break;
                 case InnerBye:
                     if (person != null && person.State == FriendState.Friend && Object.ReferenceEquals(person.Current, session))
                     {
@@ -2053,6 +2346,23 @@ namespace Maela
                 if (Send != null) Send.Dispose();
                 if (Receive != null) Receive.Dispose();
             }
+        }
+
+        private sealed class ActiveCall
+        {
+            public ulong Id;
+            public string FriendId;
+            public bool Incoming;
+            public bool Answered;
+            public bool Accepted;
+            public bool CanHost;
+            public bool CallerCanHost;
+            public bool WaitingForRoom;
+            public bool RoomPassedOn;
+            public bool Settled;
+            public byte[] Resend;
+            public DateTime LastSentUtc;
+            public DateTime ExpiresUtc;
         }
 
         private sealed class HelloLimit

@@ -6,6 +6,11 @@
   accept, click them to chat. Your encryption key is your account, so a new IP address never ends
   a friendship. There are no accounts and no server: messages go directly between your two PCs,
   and wait encrypted on the sender's PC until you're both online.
+- **Call your friends.** Click Call on a friend who's online. It rings until they answer, then
+  starts a private room just for the two of you, with screen sharing and everything else a room
+  has. Busy doesn't ring: you get a missed call in the chat.
+- **Room passwords stay on your PC.** Joining now proves you know the password without sending it.
+  To join a password room, the host needs this version.
 - **Back up your account.** Save your friend key and friends list to a password-protected file, and
   restore it after reinstalling Windows or on a new PC. Friends carry on with no new request.
 - **Online, Away, Busy, Offline.** Busy still delivers messages but makes no sound. Offline closes

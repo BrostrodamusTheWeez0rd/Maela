@@ -2560,7 +2560,7 @@ namespace Maela
                 string password;
                 if (!TryParseJoin(packet.Payload, out requestedName, out password))
                     return;
-                if (!PasswordMatches(password))
+                if (!PasswordMatches(password, viaPending ?? SessionFor(sender, null)))
                 {
                     RecordPasswordFailure(sender.Address.ToString());
                     SendPacketVia(viaPending, sender, PacketReject, 0, 0, Encoding.UTF8.GetBytes(String.IsNullOrEmpty(password) ? "This room needs a password." : "Wrong room password."));

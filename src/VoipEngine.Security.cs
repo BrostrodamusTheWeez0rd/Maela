@@ -12,6 +12,7 @@ namespace Maela
         public PacketCipher Send;
         public PacketCipher Receive;
         public DateTime CreatedUtc = DateTime.UtcNow;
+        public byte[] Transcript; // Unique to this connection: a password proof only works once.
 
         public void Dispose()
         {
@@ -32,7 +33,9 @@ namespace Maela
     ///   of all three public keys. Only the real host (holder of S's private key) can derive
     ///   them, so a man in the middle can neither read nor impersonate. The fresh ephemeral keys
     ///   give forward secrecy.
-    ///   3. client -> host  JOIN (encrypted) carries the display name and the room password.
+    ///   3. client -> host  JOIN (encrypted) carries the display name and a proof of the room
+    ///   password: an HMAC of the handshake, keyed by the password's hash. The password itself
+    ///   never leaves your PC. A modified host could still try guessing it against the proof.
     ///
     /// Afterwards every packet is DATA: header || counter || AES-256-CTR ciphertext || HMAC tag,
     /// with replay protection (see PacketCipher). The host decrypts and re-encrypts when relaying,
@@ -86,7 +89,39 @@ namespace Maela
             return fp;
         }
 
-        private static byte[] HashPassword(string password)
+        private const string ProofPrefix = "proof1:";
+
+        /// <summary>What JOIN carries in place of the password. Empty stays empty: no password.</summary>
+        internal static string JoinPasswordField(string password, byte[] transcript)
+        {
+            byte[] hash = HashPassword(password);
+            if (hash == null)
+                return String.Empty;
+            using (System.Security.Cryptography.HMACSHA256 mac = new System.Security.Cryptography.HMACSHA256(hash))
+                return ProofPrefix + Convert.ToBase64String(mac.ComputeHash(transcript));
+        }
+
+        /// <summary>Accepts a proof, or the plain password from copies of mæla older than proofs.</summary>
+        internal static bool JoinPasswordValid(string field, byte[] passwordHash, byte[] transcript)
+        {
+            if (passwordHash == null)
+                return true;
+            if (field != null && field.StartsWith(ProofPrefix, StringComparison.Ordinal))
+            {
+                if (transcript == null)
+                    return false;
+                using (System.Security.Cryptography.HMACSHA256 mac = new System.Security.Cryptography.HMACSHA256(passwordHash))
+                {
+                    byte[] proof;
+                    try { proof = Convert.FromBase64String(field.Substring(ProofPrefix.Length)); }
+                    catch { return false; }
+                    return CryptoUtil.ConstantTimeEquals(proof, mac.ComputeHash(transcript));
+                }
+            }
+            return CryptoUtil.ConstantTimeEquals(HashPassword(field) ?? new byte[32], passwordHash);
+        }
+
+        internal static byte[] HashPassword(string password)
         {
             if (String.IsNullOrEmpty(password))
                 return null;
@@ -299,6 +334,7 @@ namespace Maela
             SecureSession session = new SecureSession();
             session.Send = new PacketCipher(isClient ? clientToHost : hostToClient);
             session.Receive = new PacketCipher(isClient ? hostToClient : clientToHost);
+            session.Transcript = transcript;
             Array.Clear(clientToHost, 0, 64);
             Array.Clear(hostToClient, 0, 64);
             return session;
@@ -404,7 +440,7 @@ namespace Maela
         {
             _encryptedJoinAttempts++;
             byte[] name = Encoding.UTF8.GetBytes(_localName ?? String.Empty);
-            byte[] password = Encoding.UTF8.GetBytes(_joinPassword ?? String.Empty);
+            byte[] password = Encoding.ASCII.GetBytes(JoinPasswordField(_joinPassword, _clientSession.Transcript));
             if (name.Length > 80) Array.Resize(ref name, 80);
             if (password.Length > 200) Array.Resize(ref password, 200);
             byte[] payload = new byte[2 + name.Length + password.Length];
@@ -441,11 +477,9 @@ namespace Maela
             return true;
         }
 
-        private bool PasswordMatches(string password)
+        private bool PasswordMatches(string field, SecureSession session)
         {
-            if (_passwordHash == null)
-                return true;
-            return CryptoUtil.ConstantTimeEquals(HashPassword(password) ?? new byte[32], _passwordHash);
+            return JoinPasswordValid(field, _passwordHash, session == null ? null : session.Transcript);
         }
 
         /// <summary>Finds the session used to send to <paramref name="target"/>. Null = drop the packet.</summary>

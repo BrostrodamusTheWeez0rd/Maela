@@ -19,6 +19,15 @@ namespace Maela
         private int _friendNetworkGeneration;
         private int _friendsVersionShown = -1;
         private bool _friendAddressChanged;
+        private string _sentFriendName;
+        private string _callFriendId;
+        private string _callPassword;
+        private bool _callRoomSent;
+        private bool _callHosting;
+        private bool _callVoiceJoined;
+        private bool _callHadCompany;
+        private DateTime _callRoomStageUtc = DateTime.MinValue;
+        private IncomingCallForm _incomingCall;
         private readonly FlatButton _friendsButton = new FlatButton();
         private readonly FlatButton _statusButton = new FlatButton();
         private readonly System.Windows.Forms.Timer _friendAddressTimer = new System.Windows.Forms.Timer();
@@ -98,7 +107,21 @@ namespace Maela
             _friends.MessageReceived += delegate(string id, string text) { OnFriendEvent(delegate { FriendMessageArrived(id); }); };
             _friends.RequestReceived += delegate(string name) { OnFriendEvent(delegate { FriendAlert("Friend request from " + name); }); };
             _friends.RequestAccepted += delegate(string name) { OnFriendEvent(delegate { FriendAlert(name + " accepted your friend request"); }); };
-            _uiTimer.Tick += delegate { UpdateFriendsBar(); };
+            _friends.CallEvent += delegate(FriendCallEvent kind, string id, string code, string password)
+            {
+                OnFriendEvent(delegate { HandleCallEvent(kind, id, code, password); });
+            };
+            _uiTimer.Tick += delegate
+            {
+                UpdateFriendsBar();
+                TickFriendCall();
+                string name = _preferences.DisplayName;
+                if (name != _sentFriendName)
+                {
+                    _sentFriendName = name;
+                    _friends.SetName(name);
+                }
+            };
             UpdateFriendsBar();
 
             // Your router can be asked for your address without telling anyone else.
@@ -321,6 +344,204 @@ namespace Maela
                 FlashForAttention();
         }
 
+        // ----- Calls: ringing goes through FriendService, the call itself is a private room. -----
+
+        private string FriendName(string id)
+        {
+            foreach (FriendInfo person in _friends.GetPeople())
+            {
+                if (person.Id == id)
+                    return person.Name;
+            }
+            return "Your friend";
+        }
+
+        /// <summary>A call replaces the room you're in, so that's asked first.</summary>
+        private bool OkToLeaveRoomForCall()
+        {
+            VoipEngine engine = _engine;
+            if (engine == null || !engine.IsRunning)
+                return true;
+            string room = String.IsNullOrEmpty(_activeRoomName) ? "this room" : _activeRoomName;
+            string question = engine.IsHost && engine.MemberCount > 1
+                ? "Calling stops " + room + " for everyone in it. Continue?"
+                : "Calling takes you out of " + room + ". Continue?";
+            return MessageBox.Show(this, question, "Call", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+        }
+
+        internal void StartFriendCall(string id)
+        {
+            if (_callFriendId != null)
+            {
+                if (MessageBox.Show(this, "End the call with " + FriendName(_callFriendId) + "?", "Call", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    FinishCall("The call ended.");
+                return;
+            }
+            if (!OkToLeaveRoomForCall())
+                return;
+            if (!_friends.StartCall(id, _friendMapping != null))
+            {
+                MessageBox.Show(this, FriendName(id) + " can't be called right now.", "Call", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            _callFriendId = id;
+            ResetCallProgress();
+            ShowTrayOrFlash("Calling " + FriendName(id) + "\u2026");
+        }
+
+        private void ResetCallProgress()
+        {
+            _callPassword = null;
+            _callRoomSent = false;
+            _callHosting = false;
+            _callVoiceJoined = false;
+            _callHadCompany = false;
+            _callRoomStageUtc = DateTime.MinValue;
+        }
+
+        private void ShowTrayOrFlash(string text)
+        {
+            if (_friendsWindow != null)
+                _friendsWindow.ShowCallStatus(text);
+        }
+
+        private void HandleCallEvent(FriendCallEvent kind, string id, string code, string password)
+        {
+            switch (kind)
+            {
+                case FriendCallEvent.Incoming:
+                    if (_friends.Status == FriendStatus.Busy)
+                    {
+                        // Busy: no ringing. Your friend is told you didn't take it, and you find it in the chat.
+                        _friends.EndCall();
+                        _friends.NoteMissedCall(id);
+                        return;
+                    }
+                    _incomingCall = new IncomingCallForm(FriendName(id));
+                    _incomingCall.Answered += delegate(bool accept)
+                    {
+                        _incomingCall = null;
+                        if (!accept || !OkToLeaveRoomForCall())
+                        {
+                            _friends.EndCall();
+                            return;
+                        }
+                        _callFriendId = id;
+                        ResetCallProgress();
+                        _friends.AcceptCall(_friendMapping != null);
+                    };
+                    _incomingCall.Ring += delegate { PlaySound(SoundCue.Message); };
+                    if (!Visible)
+                        ShowTrayTip("m\u00E6la", FriendName(id) + " is calling");
+                    FlashForAttention();
+                    _incomingCall.Show();
+                    break;
+
+                case FriendCallEvent.HostNow:
+                    if (_callFriendId != id)
+                        return;
+                    _callRoomStageUtc = DateTime.UtcNow;
+                    ShowTrayOrFlash(null);
+                    HostCallRoom(id);
+                    break;
+
+                case FriendCallEvent.JoinRoom:
+                    if (_callFriendId != id)
+                        return;
+                    _callRoomStageUtc = DateTime.UtcNow;
+                    ShowTrayOrFlash(null);
+                    SavedRoom joined = new SavedRoom();
+                    joined.Name = "Call with " + FriendName(id);
+                    joined.Invite = code;
+                    joined.Password = password;
+                    StartJoinRoom(joined);
+                    break;
+
+                case FriendCallEvent.Declined:
+                    FinishCall(FriendName(id) + " didn't take the call.");
+                    break;
+
+                case FriendCallEvent.Ended:
+                    if (_incomingCall != null)
+                    {
+                        _incomingCall.Close();
+                        _incomingCall = null;
+                        _friends.NoteMissedCall(id);
+                    }
+                    if (_callFriendId == id)
+                        FinishCall("The call ended.");
+                    break;
+            }
+        }
+
+        private void HostCallRoom(string id)
+        {
+            SavedRoom room = new SavedRoom();
+            room.Name = "Call with " + FriendName(id);
+            room.Owned = true;
+            room.KeepAlive = false;
+            room.ChannelNames.Add("Call");
+            // A one-off room and a one-off password, known only to you two.
+            room.Password = BitConverter.ToString(CryptoUtil.Random(16)).Replace("-", String.Empty);
+            _callPassword = room.Password;
+            _callHosting = true;
+            StartHostRoom(room, 0, false);
+        }
+
+        /// <summary>Hands over the room once it has a code, and ends the call when the other person goes.</summary>
+        private void TickFriendCall()
+        {
+            if (_callFriendId == null)
+                return;
+            VoipEngine engine = _engine;
+            if (_callHosting && !_callRoomSent && engine != null && engine.IsRunning && RoomCode.IsValid(_activeInvite))
+            {
+                _callRoomSent = true;
+                _friends.CallRoomIsReady(_activeInvite, _callPassword);
+            }
+            if (engine == null || !engine.IsRunning)
+            {
+                if (_callRoomStageUtc != DateTime.MinValue)
+                    FinishCall(null);
+                return;
+            }
+            // Handed over, but nobody got through: routers on both sides, usually.
+            if (!_callHadCompany && _callRoomStageUtc != DateTime.MinValue && (DateTime.UtcNow - _callRoomStageUtc).TotalSeconds > 45.0)
+            {
+                FinishCall("The call couldn't connect. Your routers may not allow a direct connection.");
+                return;
+            }
+            if (engine.IsConnected && !engine.IsInVoice && !_callVoiceJoined)
+            {
+                _callVoiceJoined = true;
+                engine.ChangeChannel(1);
+            }
+            if (engine.IsConnected && engine.MemberCount >= 2)
+                _callHadCompany = true;
+            if (_callHadCompany && (!engine.IsConnected || engine.MemberCount < 2))
+                FinishCall(null);
+        }
+
+        private void FinishCall(string message)
+        {
+            string id = _callFriendId;
+            _callFriendId = null;
+            ResetCallProgress();
+            _friends.EndCall();
+            bool callRoom = _activeSavedRoom == null && !String.IsNullOrEmpty(_activeRoomName) && _activeRoomName.StartsWith("Call with ", StringComparison.Ordinal);
+            if (id != null && callRoom && _engine != null && _engine.IsRunning)
+                StopEngine();
+            // Back to no room selected: a finished call isn't a room you can host again.
+            if (_selectedRoom != null && !_savedRooms.Contains(_selectedRoom) && _selectedRoom.Name.StartsWith("Call with ", StringComparison.Ordinal))
+            {
+                _selectedRoom = null;
+                _rail.Selected = null;
+                _rail.Invalidate();
+                UpdateSelectedRoomUi();
+            }
+            ShowTrayOrFlash(message);
+        }
+
         internal void ShowFriendsWindow()
         {
             if (_friends == null)
@@ -329,6 +550,7 @@ namespace Maela
             {
                 _friendsWindow = new FriendsWindow(_friends);
                 _friendsWindow.ChangeStatus = SetMyStatus;
+                _friendsWindow.Call = StartFriendCall;
                 _friendsWindow.FormClosed += delegate { _friendsWindow = null; };
                 if (_friendAddressChanged)
                     _friendsWindow.ShowAddressChanged();
@@ -374,10 +596,13 @@ namespace Maela
         private int _chatDeliveredShown = -1;
         private string _chatIdShown;
         private bool _addressChanged;
+        private string _callStatus;
         private readonly FlatButton _backupButton = new FlatButton();
 
         /// <summary>Goes through the app, which also opens and closes the router port.</summary>
         public Action<FriendStatus> ChangeStatus;
+        public Action<string> Call;
+        private readonly FlatButton _callButton = new FlatButton();
 
         public FriendsWindow(FriendService friends)
         {
@@ -457,11 +682,18 @@ namespace Maela
             head.Controls.Add(_acceptButton);
             head.Controls.Add(_blockButton);
             head.Controls.Add(_updateCodeButton);
+            _callButton.Text = "Call";
+            _callButton.Icon = IconKind.Mic;
+            _callButton.Look = ButtonLook.Primary;
+            _callButton.Size = new Size(84, 34);
+            _callButton.Click += delegate { if (_selectedId != null && Call != null) Call(_selectedId); };
+            head.Controls.Add(_callButton);
             head.Resize += delegate
             {
                 _blockButton.Location = new Point(head.Width - 150, 14);
                 _acceptButton.Location = new Point(head.Width - 244, 14);
                 _updateCodeButton.Location = new Point(head.Width - 144, 14);
+                _callButton.Location = new Point(head.Width - 98, 14);
                 // Stop short of the buttons, so long names can't cover them.
                 _title.Width = Math.Max(80, head.Width - 270);
                 _subtitle.Width = _title.Width;
@@ -475,7 +707,12 @@ namespace Maela
             _notice.Cursor = Cursors.Hand;
             _notice.Click += delegate
             {
-                if (_addressChanged)
+                if (_callStatus != null)
+                {
+                    _callStatus = null;
+                    RefreshNotice(null);
+                }
+                else if (_addressChanged)
                 {
                     _addressChanged = false;
                     CopyCode();
@@ -579,6 +816,13 @@ namespace Maela
         public bool IsReading(string id)
         {
             return Visible && WindowState != FormWindowState.Minimized && ContainsFocus && id == _selectedId;
+        }
+
+        /// <summary>Shows how a call is going, under the friend's name.</summary>
+        public void ShowCallStatus(string text)
+        {
+            _callStatus = text;
+            RefreshAll(true);
         }
 
         public void ShowAddressChanged()
@@ -815,6 +1059,7 @@ namespace Maela
             _acceptButton.Visible = isRequest;
             _blockButton.Visible = isRequest;
             _updateCodeButton.Visible = longUnreachable;
+            _callButton.Visible = isFriend && !longUnreachable && person.Status != FriendStatus.Offline;
             _title.Text = person == null ? "Friends" : person.Name;
             _subtitle.Text = person == null ? "Click a friend to open your chat with them." : Describe(person) + "  ·  ID " + person.ShortId;
             RefreshNotice(person);
@@ -844,7 +1089,9 @@ namespace Maela
         private void RefreshNotice(FriendInfo person)
         {
             string text = null;
-            if (_addressChanged)
+            if (_callStatus != null)
+                text = _callStatus;
+            else if (_addressChanged)
                 text = "Your address changed. Friends who were offline may need your new code. Click to copy it.";
             else if (_friends.Status == FriendStatus.Offline)
                 text = "You're appearing offline. Friends can't reach you, and anything you write waits here until you're both online.";
@@ -977,5 +1224,56 @@ namespace Maela
         }
 
         public string Password { get { return _password.Box.Text; } }
+    }
+
+    /// <summary>A friend is calling. Stays on top, rings gently, and does nothing until you click.</summary>
+    internal sealed class IncomingCallForm : ThemedDialog
+    {
+        private readonly System.Windows.Forms.Timer _ring = new System.Windows.Forms.Timer();
+        private bool _answered;
+
+        public event Action<bool> Answered;
+        public event EventHandler Ring;
+
+        public IncomingCallForm(string name) : base("Incoming call", 380, 170)
+        {
+            TopMost = true;
+            StartPosition = FormStartPosition.CenterScreen;
+            AddHeading(name, "is calling you");
+            FlatButton decline = Button("Decline", DialogResult.None);
+            FlatButton accept = Button("Accept", DialogResult.None);
+            decline.Click += delegate { Finish(false); };
+            accept.Click += delegate { Finish(true); };
+            AddButtons(decline, accept);
+            CancelButton = null;
+            AcceptButton = null; // A stray Enter mustn't answer a call.
+            FormClosing += delegate { Finish(false); };
+            _ring.Interval = 2000;
+            _ring.Tick += delegate { if (Ring != null) Ring(this, EventArgs.Empty); };
+            Shown += delegate
+            {
+                if (Ring != null) Ring(this, EventArgs.Empty);
+                _ring.Start();
+            };
+        }
+
+        /// <summary>The call ended before you answered.</summary>
+        public new void Close()
+        {
+            _answered = true;
+            _ring.Stop();
+            base.Close();
+        }
+
+        private void Finish(bool accept)
+        {
+            if (_answered)
+                return;
+            _answered = true;
+            _ring.Stop();
+            if (Answered != null)
+                Answered(accept);
+            BeginInvoke((MethodInvoker)delegate { base.Close(); });
+        }
     }
 }

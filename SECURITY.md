@@ -13,7 +13,7 @@ describes what that protects against and what it doesn't. Protocol details are i
 | Replaying captured packets | **Yes** | Per-packet counters with a replay window. |
 | A fake host pretending to be your friend's room (man in the middle) | **Yes** | The room code contains a fingerprint of the host's key; mæla refuses any host that doesn't match it. |
 | Recorded traffic decrypted later if a key leaks | **Yes** (forward secrecy) | Each connection uses fresh one-time keys. |
-| Uninvited people who somehow get the room code | **Optional** | Hosts can set a room password. Five wrong passwords lock that IP out for a minute. |
+| Uninvited people who somehow get the room code | **Optional** | Hosts can set a room password. Five wrong passwords lock that IP out for a minute. Joining sends a proof of the password, tied to that connection, not the password itself. Older copies of mæla still send it, encrypted. |
 | Someone guessing room codes | **Yes** | Codes include an 80-bit key fingerprint; guessing one is not feasible. |
 
 ## What is not protected
@@ -25,6 +25,9 @@ describes what that protects against and what it doesn't. Protocol details are i
   because there is no central server to look it up. Treat room codes like a phone number.
 - **Anyone can tell a mæla room is running** at an address if they probe it. The probe reply
   contains nothing else: no room name, no member list, no count.
+- **A modified host could still try to guess a room password.** It never receives the password
+  from this version, but it can test guesses against the proof offline. Use a long one, and not one
+  from anywhere else.
 - **Display names are chosen freely.** mæla doesn't verify identities; someone with the code
   (and password) can call themselves anything.
 - **A compromised PC.** If malware runs on the host's or a member's computer, it can listen in.
@@ -78,6 +81,10 @@ What it doesn't protect:
   up, so the code has to contain it. They can also send you a request. Share it like a phone
   number.
 - **Friends can see your IP address and status,** because your PCs talk directly.
+- **Calls go through a private room.** Accepting a call starts a one-off room with a one-off
+  password, sent over your encrypted friend connection. A friend can ring you but can't put you in
+  a room: mæla only joins for a call you started or accepted. Like any room, whoever hosts it can
+  hear the call and sees the other's IP address, which friends already know.
 - **Your PC is a little more visible.** While online, your listener sends a small encrypted check
   to each friend regularly. Someone watching your network can see that traffic and who it goes
   to, but not what's in it.

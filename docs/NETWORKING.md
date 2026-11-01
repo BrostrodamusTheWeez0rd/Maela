@@ -56,8 +56,12 @@ Every datagram starts with a 6-byte outer header: magic `ROV2` (4) | version 6 |
 3. The client checks `S` against the room code's fingerprint, then both sides compute
    `DH(ec, S)` and `DH(ec, Eh)` and derive separate client→host and host→client keys with
    HKDF-SHA256, bound to a hash of `Ec`, `S` and `Eh`.
-4. The client's first DATA packet is JOIN (display name and room password). The host accepts or
-   rejects it inside the encrypted channel.
+4. The client's first DATA packet is JOIN (display name and password field). The field holds
+   `proof1:` and a Base64 HMAC-SHA256 of the handshake hash, keyed by the SHA-256 of the room
+   password, so it's useless on any other connection and the password never leaves the client.
+   Hosts also accept the plain password from older copies. Older hosts don't understand proofs, so
+   joining a password room needs the host to have updated. The host accepts or rejects JOIN inside
+   the encrypted channel.
 
 Hosts limit handshakes to 10 per IP per 10 seconds and lock an IP out for a minute after five
 wrong passwords.
@@ -183,6 +187,10 @@ Every datagram starts with magic `MFR1` (4) and a type (1).
 - A changed address reaches friends in the next PING. If both people's addresses change while
   they're apart, nothing can find them: either of them pastes the other's current code, and the
   connection updates both. mæla deliberately has no server or DHT lookup.
+- CALL (kind, call id, details) rings a friend: INVITE (can I host?), ACCEPT (should you host?),
+  ROOM_READY (room code, one-off password), JOINING, DECLINE, CANCEL. Each is resent every second
+  until answered, for up to 30 seconds. Only friends can ring, and ROOM_READY is ignored unless it
+  matches the call you started or accepted. The call itself is an ordinary private room.
 - PING and MESSAGE carry a random 4-byte incarnation, which changes when someone restores a backup.
   A backup's numbering may be out of date, so a friend who sees a new incarnation starts both
   directions again from 1 and renumbers anything undelivered. Running one key on two PCs at once

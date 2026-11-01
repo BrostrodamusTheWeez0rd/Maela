@@ -582,6 +582,169 @@ namespace Maela.Tests
             b.Dispose();
         }
 
+        static void RoomPasswordProof()
+        {
+            const string password = "SuperSecretRoomPassword";
+            byte[] hash = VoipEngine.HashPassword(password);
+            byte[] one = CryptoUtil.Random(32);
+            byte[] two = CryptoUtil.Random(32);
+            string field = VoipEngine.JoinPasswordField(password, one);
+            Check(!field.Contains(password) && !Encoding.UTF8.GetString(Convert.FromBase64String(field.Substring(7))).Contains(password), "the password isn't in what's sent");
+            Check(!field.Contains(Convert.ToBase64String(hash)), "nor is its plain hash");
+            Check(VoipEngine.JoinPasswordValid(field, hash, one), "the right password is accepted");
+            Check(!VoipEngine.JoinPasswordValid(field, hash, two), "a proof can't be replayed on another connection");
+            Check(!VoipEngine.JoinPasswordValid(VoipEngine.JoinPasswordField("wrong one", one), hash, one), "a wrong password is refused");
+            Check(!VoipEngine.JoinPasswordValid("proof1:not base64!", hash, one), "a broken proof is refused");
+            Check(!VoipEngine.JoinPasswordValid("", hash, one), "no password is refused");
+            Check(VoipEngine.JoinPasswordValid(password, hash, one), "older copies sending the plain password still get in");
+            Check(VoipEngine.JoinPasswordField("", one) == "" && VoipEngine.JoinPasswordValid("", null, one), "rooms with no password are unchanged");
+        }
+
+        static void NameChanges()
+        {
+            FriendService a = Online("Alice");
+            FriendService b = Online("Bob");
+            MakeFriends(a, b);
+            a.SetName("Alicia");
+            Check(WaitFor(delegate { return Find(b, a.Id).Name == "Alicia"; }, 3000), "a new display name reaches friends");
+            a.Dispose();
+            b.Dispose();
+        }
+
+        sealed class CallLog
+        {
+            public readonly List<string> Events = new List<string>();
+            public string Code;
+            public string Password;
+
+            public CallLog(FriendService service)
+            {
+                service.CallEvent += delegate(FriendCallEvent kind, string id, string code, string password)
+                {
+                    lock (Events)
+                    {
+                        Events.Add(kind.ToString());
+                        if (code != null && kind == FriendCallEvent.JoinRoom) { Code = code; Password = password; }
+                    }
+                };
+            }
+
+            public bool Saw(string kind)
+            {
+                lock (Events) return Events.Contains(kind);
+            }
+        }
+
+        static void Calls()
+        {
+            string roomCode = RoomCode.Encode(IPAddress.Loopback, 45555, VoipEngineTestKeys.HostFingerprint);
+            FriendService a = Online("Alice");
+            FriendService b = Online("Bob");
+            FriendService stranger = Online("Stranger");
+            MakeFriends(a, b);
+            WaitFor(delegate { return Find(a, b.Id).Status == FriendStatus.Online; }, 3000);
+            CallLog aLog = new CallLog(a);
+            CallLog bLog = new CallLog(b);
+
+            // The callee can host.
+            Check(a.StartCall(b.Id, false), "you can call a friend who's online");
+            Check(!a.StartCall(b.Id, false), "one call at a time");
+            Check(WaitFor(delegate { return bLog.Saw("Incoming"); }, 3000), "it rings them");
+            Thread.Sleep(200);
+            Check(!bLog.Saw("JoinRoom") && !bLog.Saw("HostNow"), "ringing starts nothing on its own");
+            b.AcceptCall(true);
+            Check(WaitFor(delegate { return bLog.Saw("HostNow"); }, 3000), "accepting asks the side with an open port to host");
+            b.CallRoomIsReady(roomCode, "onetimepassword");
+            Check(WaitFor(delegate { return aLog.Saw("JoinRoom"); }, 3000), "the caller is told about the room");
+            Check(aLog.Code == roomCode && aLog.Password == "onetimepassword", "with the right code and password");
+            a.CallRingSeconds = 1;
+            b.CallRingSeconds = 1;
+            a.CallRoomIsReady(roomCode, "refresh"); // Restarts the timer at the shorter length.
+            b.CallRoomIsReady(roomCode, "onetimepassword");
+            Thread.Sleep(1500);
+            Check(!aLog.Saw("Ended") && !bLog.Saw("Ended"), "the ring timer doesn't end a call that's under way");
+            a.CallRingSeconds = 30;
+            b.CallRingSeconds = 30;
+            a.EndCall();
+            b.EndCall();
+
+            // Only the caller can host.
+            aLog = new CallLog(a);
+            bLog = new CallLog(b);
+            a.StartCall(b.Id, true);
+            WaitFor(delegate { return bLog.Saw("Incoming"); }, 3000);
+            b.AcceptCall(false);
+            Check(WaitFor(delegate { return aLog.Saw("HostNow"); }, 3000), "if only the caller has an open port, they host");
+            a.CallRoomIsReady(roomCode, "secondpassword");
+            Check(WaitFor(delegate { return bLog.Saw("JoinRoom"); }, 3000), "and the person called joins");
+            a.EndCall();
+            b.EndCall();
+
+            // Declining.
+            aLog = new CallLog(a);
+            bLog = new CallLog(b);
+            a.StartCall(b.Id, true);
+            WaitFor(delegate { return bLog.Saw("Incoming"); }, 3000);
+            b.EndCall();
+            Check(WaitFor(delegate { return aLog.Saw("Declined"); }, 3000), "declining tells the caller");
+            Thread.Sleep(300);
+            bLog.Events.Clear();
+            Thread.Sleep(300);
+            Check(!bLog.Saw("Incoming"), "and it stops ringing");
+
+            // Cancelling.
+            aLog = new CallLog(a);
+            bLog = new CallLog(b);
+            a.StartCall(b.Id, true);
+            WaitFor(delegate { return bLog.Saw("Incoming"); }, 3000);
+            a.EndCall();
+            Check(WaitFor(delegate { return bLog.Saw("Ended"); }, 3000), "hanging up stops it ringing");
+            Thread.Sleep(200);
+
+            // A friend can't push you into a room you didn't ask for.
+            aLog = new CallLog(a);
+            bLog = new CallLog(b);
+            byte[] code = Encoding.ASCII.GetBytes(roomCode);
+            byte[] room = new byte[10 + 2 + code.Length + 1];
+            room[0] = 7; room[1] = 3;
+            BitConverter.GetBytes((ulong)99).CopyTo(room, 2);
+            room[10] = (byte)code.Length;
+            code.CopyTo(room, 11);
+            room[11 + code.Length] = 1;
+            room[12 + code.Length] = (byte)'x';
+            for (int i = 0; i < 20; i++)
+                a.SendInnerForTests(b.Id, room);
+            Thread.Sleep(200);
+            Check(!bLog.Saw("JoinRoom"), "a room sent out of nowhere is ignored");
+
+            a.StartCall(b.Id, true);
+            WaitFor(delegate { return bLog.Saw("Incoming"); }, 3000);
+            BitConverter.GetBytes((ulong)99).CopyTo(room, 2);
+            for (int i = 0; i < 20; i++)
+                a.SendInnerForTests(b.Id, room);
+            Thread.Sleep(200);
+            Check(!bLog.Saw("JoinRoom"), "a room for another call is ignored while ringing");
+            a.EndCall();
+            b.EndCall();
+            Thread.Sleep(100);
+
+            // Only friends can ring.
+            stranger.AddByCode(a.Code);
+            WaitFor(delegate { return IsState(a, stranger.Id, FriendState.RequestReceived); }, 3000);
+            aLog = new CallLog(a);
+            Check(!stranger.StartCall(a.Id, true), "you can't call someone before they accept");
+            byte[] invite = new byte[11];
+            invite[0] = 7; invite[1] = 1; invite[2] = 77;
+            for (int i = 0; i < 20; i++)
+                stranger.SendInnerForTests(a.Id, invite);
+            Thread.Sleep(200);
+            Check(!aLog.Saw("Incoming"), "a modified copy can't ring someone who hasn't accepted");
+
+            a.Dispose();
+            b.Dispose();
+            stranger.Dispose();
+        }
+
         static void Sanitising()
         {
             Check(FriendService.CleanName("Bob‮evil\u0000\n") == "Bobevil", "names lose invisible and direction characters");
@@ -603,6 +766,9 @@ namespace Maela.Tests
                 AddressChangeAcrossRestart();
                 ModifiedCopy();
                 Backups();
+                RoomPasswordProof();
+                NameChanges();
+                Calls();
                 BlockAndRemove();
                 Isolation();
                 NothingReadableOnDisk();
