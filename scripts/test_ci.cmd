@@ -20,7 +20,7 @@ if errorlevel 1 (
     exit /b 1
 )
 set "REFS=/reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll /reference:System.Security.dll"
-set "ENGINE=/define:PARITY /nowarn:0162,0168,0219,0414,0649,0675,1591,1573 "src\*.cs" "tests\TestSupport.cs" /recurse:"obj\deps\concentus\CSharp\Concentus\*.cs""
+set "ENGINE=/unsafe /define:PARITY /nowarn:0162,0168,0219,0414,0649,0675,1591,1573 "src\*.cs" "tests\TestSupport.cs" /recurse:"obj\deps\concentus\CSharp\Concentus\*.cs""
 
 echo === Crypto ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\CryptoTests.exe" /reference:System.Security.dll "tests\CryptoTests.cs" "src\Crypto.cs"
@@ -89,6 +89,13 @@ echo === Profiles (including hostile members) ===
 "%CSC%" /nologo /target:exe /optimize+ /out:"obj\ProfileTests.exe" /main:Maela.Tests.ProfileTests %REFS% %ENGINE% "tests\ProfileTests.cs"
 if errorlevel 1 exit /b 1
 "obj\ProfileTests.exe"
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Screen-share video (bzip2, colour, OpenH264 from Cisco) ===
+"%CSC%" /nologo /target:exe /optimize+ /out:"obj\CodecTests.exe" /main:Maela.Tests.CodecTests %REFS% %ENGINE% "tests\CodecTests.cs"
+if errorlevel 1 exit /b 1
+"obj\CodecTests.exe"
 if errorlevel 1 exit /b 1
 
 echo.

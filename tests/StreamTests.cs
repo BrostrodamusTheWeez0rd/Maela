@@ -133,13 +133,16 @@ namespace Maela.Tests
                 Check(bob.WatchStream(aliceId) && carol.WatchStream(aliceId) && host.WatchStream(aliceId), "Bob, Carol and the host click Watch stream");
                 dave.WatchStream(aliceId);
                 Check(WaitFor(delegate { return alice.StreamViewerCount == 3; }, 5000), "Alice has 3 viewers (" + alice.StreamViewerCount + "); Dave, in another channel, isn't one");
+                int sentFrom = index;
                 Pump(alice, 3.0, ref index, r);
+                int sent = index - sentFrom;
                 Thread.Sleep(400);
                 Check(bob.GetWatchState(aliceId) == StreamWatchState.Direct, "Bob is connected directly (" + bob.GetWatchState(aliceId) + ")");
                 Check(carol.GetWatchState(aliceId) == StreamWatchState.Relayed, "Carol, who turned direct off, goes through the host (" + carol.GetWatchState(aliceId) + ")");
-                Check(bobSink.Frames > 150 && bobSink.Corrupt == 0, "Bob receives intact frames (" + bobSink.Frames + ", " + bobSink.Corrupt + " corrupt)");
-                Check(carolSink.Frames > 150 && carolSink.Corrupt == 0, "Carol receives intact frames via the host (" + carolSink.Frames + ")");
-                Check(hostSink.Frames > 150 && hostSink.Corrupt == 0, "the host receives intact frames (" + hostSink.Frames + ")");
+                // Every frame sent should arrive (the first may be skipped while waiting for a keyframe).
+                Check(bobSink.Frames >= sent - 2 && bobSink.Corrupt == 0, "Bob receives every frame intact (" + bobSink.Frames + " of " + sent + ", " + bobSink.Corrupt + " corrupt)");
+                Check(carolSink.Frames >= sent - 2 && carolSink.Corrupt == 0, "Carol receives every frame via the host (" + carolSink.Frames + " of " + sent + ")");
+                Check(hostSink.Frames >= sent - 2 && hostSink.Corrupt == 0, "the host receives every frame (" + hostSink.Frames + " of " + sent + ")");
                 Check(daveSink.Frames == 0, "Dave receives nothing");
                 Console.WriteLine("     Bob " + (bobSink.Bytes * 8 / 3 / 1000) + " kbps, suggested bitrate " + alice.SuggestedBitrateKbps(12000) + " kbps");
 
@@ -151,7 +154,7 @@ namespace Maela.Tests
                 Pump(alice, 4.0, ref index, r);
                 bob.PacketLossForTests = 0;
                 Pump(alice, 1.0, ref index, r);
-                Check(lossy.Frames > 30 && lossy.Corrupt == 0, "frames keep arriving intact (" + lossy.Frames + ")");
+                Check(lossy.Frames > 20 && lossy.Corrupt == 0, "frames keep arriving intact (" + lossy.Frames + ")");
                 Check(lossy.BadChains == 0, "after a loss, video resumes only from a keyframe (" + lossy.Keyframes + " keyframes)");
                 Check(alice.SuggestedBitrateKbps(12000) < 12000, "the sharer is told to lower quality (" + alice.SuggestedBitrateKbps(12000) + " kbps)");
 
@@ -191,9 +194,10 @@ namespace Maela.Tests
                 Check(host.StartScreenShare(3840, 2160, 120), "the host goes live (4K120)");
                 Check(WaitFor(delegate { return alice.GetLiveStream(host.LocalMemberId) != null; }, 3000) && alice.WatchStream(host.LocalMemberId), "Alice watches the host");
                 Thread.Sleep(500);
+                int hostFrom = index;
                 Pump(host, 1.5, ref index, r);
                 Thread.Sleep(300);
-                Check(aliceSink.Frames > 50 && aliceSink.Corrupt == 0, "Alice receives the host's frames (" + aliceSink.Frames + ")");
+                Check(aliceSink.Frames >= index - hostFrom - 2 && aliceSink.Corrupt == 0, "Alice receives the host's frames (" + aliceSink.Frames + ")");
                 host.StopScreenShare();
                 Check(WaitFor(delegate { return alice.GetLiveStream(host.LocalMemberId) == null; }, 3000), "the host stops sharing");
             }

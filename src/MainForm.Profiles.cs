@@ -428,7 +428,7 @@ namespace Maela
             AddButtons(Button("Cancel", DialogResult.Cancel), Button("Save", DialogResult.OK));
         }
 
-        private static FlatButton Button(string text, DialogResult result)
+        private static new FlatButton Button(string text, DialogResult result)
         {
             FlatButton b = new FlatButton();
             b.Text = text;
