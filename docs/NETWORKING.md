@@ -83,6 +83,22 @@ authentication, arrives twice, or is older than the 1,024-packet replay window.
 - Older versions stop reading the peer list after the member entries, so extension sections
   are ignored by them.
 
+### Screen sharing
+
+- STREAM_ANNOUNCE (client to host) says you're live (size and frame rate) or stopped; the host
+  lists live streams in peer-list section 3. Only members in a voice channel can go live.
+- STREAM_WATCH (viewer to host) asks to watch. The host checks both are in the same voice
+  channel (at most 8 viewers), creates a random 32-byte key for the pair and sends STREAM_PEER
+  to both over their encrypted sessions, with each other's public and LAN addresses.
+- Both sides send sealed "punch" packets (outer type 0x45) at each other for 6 s; the first
+  one to arrive opens the direct path. Until then, or if either side disallows direct
+  connections, sealed media goes inside RELAY_MEDIA through the host, which forwards only
+  between pairs it introduced, within 16 MB/s per member.
+- Media is sealed with keys derived from the pair key (HKDF-SHA256, one per direction):
+  AES-256-CTR + HMAC-SHA256 with a replay window. Video frames are H.264, split into 1,100-byte
+  fragments; viewers rebuild them, ask for a keyframe after any loss and report received
+  bitrate and loss every 0.5 s.
+
 ### Leaving and coming back
 
 - Quitting sends LEAVE three times (UDP can drop one); mæla also sends it if it crashes.

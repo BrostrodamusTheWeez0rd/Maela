@@ -49,5 +49,10 @@ Before tagging a public build:
 - [ ] Setting a profile picture and status shows on your card, in the sidebar and in chat for
       everyone; the card's volume and mute work; host Move/Kick/Ban work from the card.
 - [ ] First-run setup shows "What mæla uses".
+- [ ] Share screen: OpenH264 downloads after asking; a screen and a single window can be shared;
+      the red bar shows viewers; Stop works; leaving voice stops sharing.
+- [ ] Watch: LIVE badge, double-click and the card's Watch stream open the viewer; full screen
+      works; the picture is smooth at 1080p60 between two PCs on different networks.
+- [ ] The first-time direct-connection notice appears; "always through the host" works.
 - [ ] Settings > Licenses shows the MIT license and third-party notices.
 - [ ] `package_release.cmd` produces the expected release ZIP.

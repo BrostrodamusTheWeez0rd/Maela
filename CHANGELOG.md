@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0 - Screen sharing
+
+- **Share your screen** with the new button on the voice card: a whole screen or a single
+  window, 720p to 4K, 30, 60 or 120 fps (1080p60 by default), with or without your mouse
+  pointer. A red bar shows you're live, how many are watching, and a Stop button.
+- **Watch** by double-clicking someone with a LIVE badge in your voice channel, or from their
+  profile card. Nothing is sent until someone watches. Watch in a window or full screen
+  (double-click or F11).
+- **Direct, encrypted and private by design.** Video goes straight from the sharer to each
+  viewer, encrypted with a fresh key for that pair; if a direct path can't be opened it goes
+  through the host. The first time, mæla explains that a direct connection shows the other
+  person your IP address, and you can choose to always go through the host instead
+  (Settings > App).
+- **The viewer is locked down.** Watching runs in a separate copy of mæla at Low integrity in
+  a restricted Windows job: it can't write to your files, start programs or use the clipboard,
+  so even a deliberately broken stream can't reach the rest of your PC.
+- **Smooth over real connections.** After lost data, video resumes cleanly from a fresh
+  keyframe; viewers report what they receive and the quality adapts to the slowest viewer.
+- Video uses OpenH264 (Cisco), downloaded from Cisco's server the first time you share or
+  watch and checked against a fingerprint built into mæla.
+- Encoding runs on the processor for now: 1080p60 is comfortable on most PCs; 1440p, 4K and
+  120 fps depend on how fast your processor is. Graphics-card encoding is planned.
+- Screen sharing needs 64-bit Windows.
+
 ## 0.8.0 - Channels, profiles and Disconnect
 
 - **One click opens a channel's chat, double-click joins its voice.** You can read and type in

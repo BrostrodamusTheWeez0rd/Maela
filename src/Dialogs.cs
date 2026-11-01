@@ -731,7 +731,7 @@ namespace Maela
         private bool _busy;
         private bool _failed;
 
-        public SetupDialog(AppPreferences preferences) : base("Welcome to mæla", 640, 650)
+        public SetupDialog(AppPreferences preferences) : base("Welcome to mæla", 640, 700)
         {
             _preferences = preferences;
             PictureBox logo = new PictureBox();
@@ -775,6 +775,7 @@ namespace Maela
             AddUse("Windows .NET Framework 4", "Runs mæla. Already part of Windows 10 and 11.", "Nothing to install");
             AddUse("Opus voice codec (Concentus)", "Voice. BSD 3-clause, built into mæla from its official source.", "Nothing to download");
             AddUse(EmojiPack.Name + " colour emoji", EmojiPack.License + ". " + EmojiPack.All.Length + " images from the official project; every file is checked against a fingerprint built into mæla.", "Download now, about 115 KB");
+            AddUse("OpenH264 (Cisco)", "Screen sharing. OpenH264 Video Codec provided by Cisco Systems, Inc. BSD 2-clause; Cisco pays the H.264 patent fees.", "Asks first, when you share");
             Cursor_Y += 2;
             _status = AddText("Nothing else is downloaded without asking you first. Settings > Licenses has the full license texts.",
                 Theme.Current.Muted, ClientSize.Width - Margin_X * 2);
