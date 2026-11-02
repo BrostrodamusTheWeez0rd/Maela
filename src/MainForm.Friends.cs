@@ -521,9 +521,17 @@ namespace Maela
                     _incomingCall.Answered += delegate(bool accept)
                     {
                         _incomingCall = null;
+                        if (accept && !Visible)
+                            RestoreFromTray();
                         if (!accept || !OkToLeaveRoomForCall())
                         {
                             _friends.EndCall();
+                            return;
+                        }
+                        // They may have hung up while you were answering that question.
+                        if (!_friends.CanAcceptCall)
+                        {
+                            ShowTrayOrFlash("The call ended.");
                             return;
                         }
                         _callFriendId = id;
@@ -1324,7 +1332,10 @@ namespace Maela
         public IncomingCallForm(string name) : base("Incoming call", 380, 170)
         {
             TopMost = true;
-            StartPosition = FormStartPosition.CenterScreen;
+            // In the corner, so it can never sit on top of a question in the middle of the screen.
+            StartPosition = FormStartPosition.Manual;
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            Location = new Point(area.Right - Width - 16, area.Bottom - Height - 16);
             AddHeading(name, "is calling you");
             FlatButton decline = Button("Decline", DialogResult.None);
             FlatButton accept = Button("Accept", DialogResult.None);
@@ -1357,6 +1368,7 @@ namespace Maela
                 return;
             _answered = true;
             _ring.Stop();
+            Hide(); // First: answering can open a question, which would lock this window while it covers it.
             if (Answered != null)
                 Answered(accept);
             BeginInvoke((MethodInvoker)delegate { base.Close(); });
@@ -1371,7 +1383,9 @@ namespace Maela
         public FriendRequestForm(string name, string shortId) : base("Friend request", 400, 200)
         {
             TopMost = true;
-            StartPosition = FormStartPosition.CenterScreen;
+            StartPosition = FormStartPosition.Manual;
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            Location = new Point(area.Right - Width - 16, area.Bottom - Height - 16);
             AddHeading(name, "wants to be your friend  \u00B7  ID " + shortId);
             FlatButton decline = Button(String.Empty, DialogResult.None);
             FlatButton accept = Button(String.Empty, DialogResult.None);

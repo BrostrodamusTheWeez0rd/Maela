@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.3 - Call prompt fix and tidier sharing
+
+- **Tidier screen sharing.** Sharing no longer allocates a new full-size preview frame 10 times a
+  second, and a graphics card encoder that fails to open is now fully released.
+- **Fixed a freeze when answering a call.** If you were still in a room, the question asking whether
+  to leave it opened behind the call prompt and locked mæla until it was force-closed. Call and
+  friend request prompts now appear in the corner of the screen.
+
 ## 0.11.2 - Friends in the room row and call sounds
 
 - **Fixed the broken layout from 0.11.1.** Opening Friends could put the room list on top of it, or

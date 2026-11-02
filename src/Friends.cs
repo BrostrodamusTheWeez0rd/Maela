@@ -751,6 +751,9 @@ namespace Maela
             }
         }
 
+        /// <summary>False once the caller has hung up or the ringing has timed out.</summary>
+        public bool CanAcceptCall { get { lock (_lock) return _call != null && _call.Incoming && !_call.Answered; } }
+
         /// <summary>Only ever called from your own click on Accept.</summary>
         public void AcceptCall(bool canHost)
         {

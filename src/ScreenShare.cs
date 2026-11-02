@@ -48,6 +48,7 @@ namespace Maela
         public Size OutputSize;
         private I420Frame _preview;
         private long _previewAt;
+        private I420Frame _previewSpare;
         private readonly object _previewLock = new object();
 
         /// <summary>A copy of what you're sending, about 10 times a second (for your own preview).</summary>
@@ -149,11 +150,18 @@ namespace Maela
                         if ((long)now - _previewAt >= 100)
                         {
                             _previewAt = (long)now;
-                            I420Frame copy = new I420Frame(frame.Width, frame.Height);
+                            // Two buffers in turn: a new one 10 times a second keeps the garbage collector busy.
+                            I420Frame copy = _previewSpare;
+                            if (copy == null || copy.Width != frame.Width || copy.Height != frame.Height)
+                                copy = new I420Frame(frame.Width, frame.Height);
                             Buffer.BlockCopy(frame.Y, 0, copy.Y, 0, frame.Y.Length);
                             Buffer.BlockCopy(frame.U, 0, copy.U, 0, frame.U.Length);
                             Buffer.BlockCopy(frame.V, 0, copy.V, 0, frame.V.Length);
-                            lock (_previewLock) _preview = copy;
+                            lock (_previewLock)
+                            {
+                                _previewSpare = _preview;
+                                _preview = copy;
+                            }
                         }
                         frame = _exchange.Publish(frame);
                         published = true;

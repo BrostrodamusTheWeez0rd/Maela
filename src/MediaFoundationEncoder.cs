@@ -198,6 +198,8 @@ namespace Maela
                         {
                             candidate._activate = IntPtr.Zero; // Still ours to release, below.
                             candidate.Dispose();
+                            // Frees the graphics card's encoder session if it got as far as making one.
+                            try { Slot<NoArgsFn>(activate, ActivateShutdown)(activate); } catch { }
                         }
                     }
                     Release(activate);
