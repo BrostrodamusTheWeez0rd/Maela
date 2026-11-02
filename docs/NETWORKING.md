@@ -88,12 +88,22 @@ authentication, arrives twice, or is older than the 1,024-packet replay window.
   know, so extension sections are ignored by them.
 - The room's name is in peer-list section 4 (length byte, UTF-8, at most 40 characters), so everyone
   sees the name the host chose. Room codes don't carry it. A room joined from a host too old to send
-  it stays "Voice Room".
+  it stays "Voice Room". Hosts can rename a room while it's running.
+- Room art comes only from the host, and members have no way to send it. Peer-list section 5 holds a
+  version for the picture and one for the banner: the first 4 bytes of the SHA-256 of the compressed
+  pixels, or 0 for none. Members request what they lack with ROOM_ART_GET (kind, version, first chunk,
+  at most 32 chunks) and receive ROOM_ART_DATA in 1,000-byte chunks. A finished blob must hash to the
+  advertised version and inflate to exactly 80×80 or 480×120 RGB565 pixels, at most 16 KB or 128 KB
+  compressed. Hosts answer at most 20 requests per member per second. Members save the art with the
+  room, so an unchanged piece isn't fetched again.
 
 ### Screen sharing
 
 - STREAM_ANNOUNCE (client to host) says you're live (size and frame rate) or stopped; the host
   lists live streams in peer-list section 3. Only members in a voice channel can go live.
+- Sending STREAM_ANNOUNCE again with the same stream id and a new size or frame rate changes the
+  stream while live: viewers stay connected and pick up the change from the next keyframe. An older
+  host keeps showing the old size but doesn't disconnect anyone.
 - STREAM_WATCH (viewer to host) asks to watch. The host checks both are in the same voice
   channel (at most 8 viewers), creates a random 32-byte key for the pair and sends STREAM_PEER
   to both over their encrypted sessions, with each other's public and LAN addresses.

@@ -52,13 +52,13 @@ or plays; it is never treated as a file or a command.
 | Break into your PC with a crafted video stream | Contained, with one exception | Streams are decoded in a separate viewer at Low integrity inside a restricted job: no writing to your files, no starting programs, no clipboard. **Exception:** at 1080p and above, by default, decoding happens on your graphics card, and the sandbox protects less against a bug in the graphics driver. mæla checks the stream first and allows only the kind of video its own encoders make. To keep all decoding on the processor, choose Never under Settings > App. |
 | See your Windows username, file names or folders | No | Never sent. Your display name starts as your Windows account name; change it in Settings. |
 | Get the location or camera details from your profile picture | No | Your PC turns the picture into an 80×80 pixel copy; only those pixels are sent. |
-| Send you a booby-trapped image | No | Pictures arrive as plain pixels. mæla never runs an image decoder on anything another person sent. |
+| Send you a booby-trapped image | No | Pictures, including a room's picture and banner, arrive as plain pixels. mæla never runs an image decoder on anything another person sent. |
 | Crash or freeze your mæla with bad data | Designed not to | Every message type has size limits and strict checks; bad data is dropped. `tests/ProfileTests.cs` and `tests/SecurityTests.cs` send random, oversized, inconsistent and "zip bomb" data at a real room on every build. |
 | Flood the room | Limited | Chat and profile changes are rate-limited per person; the host can kick or ban. |
 | Pretend to be the host | No | The host's key is checked against the room code. |
 | Host your saved room themselves | No | Only the PC holding that room's key can host it, and that key never leaves it. |
 
-The **host** can additionally move, kick and ban people, create, rename and delete channels,
+The **host** can additionally rename the room, set its picture and banner, move, kick and ban people, create, rename and delete channels,
 and (as above) hear and read everything in their room.
 
 ## Friends

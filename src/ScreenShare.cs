@@ -29,7 +29,8 @@ namespace Maela
         private const int EncoderFailFrames = 120; // About two seconds of nothing coming out.
 
         private readonly VoipEngine _engine;
-        private readonly ShareSettings _settings;
+        private volatile ShareSettings _settings;
+        private volatile bool _sourceSwitched; // The next frame is a new picture: worth a keyframe.
         private readonly Thread _captureThread, _encodeThread;
         private readonly FrameExchange<I420Frame> _exchange = new FrameExchange<I420Frame>();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -90,6 +91,35 @@ namespace Maela
             }
         }
 
+        public static bool SameSource(CaptureSource a, CaptureSource b)
+        {
+            return a.IsWindow == b.IsWindow && (a.IsWindow ? a.Window == b.Window : a.MonitorDevice == b.MonitorDevice);
+        }
+
+        /// <summary>
+        /// Changes the stream while it runs. The threads pick the rest up on their next frame:
+        /// capture swaps only if the source changed, and the encoder reopens only if the size or
+        /// frame rate did. Sound restarts only if it was turned on or off or the source changed.
+        /// </summary>
+        public void Apply(ShareSettings next)
+        {
+            ShareSettings previous = _settings;
+            bool sourceChanged = !SameSource(previous.Source, next.Source);
+            _settings = next;
+            if (next.ShareAudio == previous.ShareAudio && (!next.ShareAudio || !sourceChanged))
+                return;
+            StreamAudioSender old = _audio;
+            _audio = null;
+            _audioProblem = null;
+            if (old != null)
+                old.Dispose();
+            if (next.ShareAudio)
+            {
+                try { _audio = new StreamAudioSender(_engine, next.Source); }
+                catch (Exception ex) { _audioProblem = ex.Message; }
+            }
+        }
+
         public static int DefaultBitrateKbps(int height, int fps)
         {
             int kbps = height <= 720 ? 2500 : height <= 1080 ? 4500 : height <= 1440 ? 9000 : 16000;
@@ -106,17 +136,30 @@ namespace Maela
             IScreenCapture capture = null;
             try
             {
-                capture = ScreenCaptureFactory.Create(_settings.Source);
+                CaptureSource source = _settings.Source;
+                capture = ScreenCaptureFactory.Create(source);
                 Method = capture.Method;
+                bool switching = false;
                 I420Frame frame = null;
                 byte[] scratch = null;
-                double interval = 1000.0 / _settings.Fps;
                 double next = 0;
                 long timeSum = 0, timeCount = 0, timeStart = 0;
                 bool published = false;
 
                 while (!_stop)
                 {
+                    ShareSettings settings = _settings;
+                    if (!SameSource(source, settings.Source))
+                    {
+                        IScreenCapture old = capture;
+                        capture = null;
+                        old.Dispose();
+                        source = settings.Source;
+                        capture = ScreenCaptureFactory.Create(source);
+                        Method = capture.Method;
+                        switching = true;
+                    }
+                    double interval = 1000.0 / settings.Fps;
                     double now = _clock.Elapsed.TotalMilliseconds;
                     if (now < next)
                     {
@@ -129,15 +172,16 @@ namespace Maela
                     bool measure = MeasureTimings;
                     long started = measure ? _clock.ElapsedTicks : 0;
                     I420Frame target = frame;
-                    bool fresh = capture.Capture(0, _settings.ShowCursor, delegate(IntPtr bits, int stride)
+                    IScreenCapture active = capture;
+                    bool fresh = active.Capture(0, settings.ShowCursor, delegate(IntPtr bits, int stride)
                     {
-                        Size size = FrameScaler.Fit(capture.Width, capture.Height, _settings.MaxHeight);
+                        Size size = FrameScaler.Fit(active.Width, active.Height, settings.MaxHeight);
                         if (target == null || target.Width != (size.Width & ~1) || target.Height != (size.Height & ~1))
                         {
                             target = new I420Frame(size.Width, size.Height);
                             OutputSize = new Size(target.Width, target.Height);
                         }
-                        FrameScaler.ToI420(bits, stride, capture.Width, capture.Height, target, ref scratch);
+                        FrameScaler.ToI420(bits, stride, active.Width, active.Height, target, ref scratch);
                     });
                     frame = target;
                     if (fresh && frame != null)
@@ -162,6 +206,11 @@ namespace Maela
                                 _previewSpare = _preview;
                                 _preview = copy;
                             }
+                        }
+                        if (switching)
+                        {
+                            switching = false;
+                            _sourceSwitched = true;
                         }
                         frame = _exchange.Publish(frame);
                         published = true;
@@ -198,8 +247,8 @@ namespace Maela
             IVideoEncoder encoder = null;
             try
             {
-                int maxKbps = DefaultBitrateKbps(_settings.MaxHeight, _settings.Fps);
-                int kbps = maxKbps;
+                int kbps = 0;
+                int encoderFps = 0;
                 I420Frame frame = null;
                 long lastKeyframeMs = -100000, lastRateChangeMs = 0;
                 int framesThisSecond = 0, nothingOut = 0;
@@ -217,12 +266,21 @@ namespace Maela
                     }
 
                     long nowMs = _clock.ElapsedMilliseconds;
+                    ShareSettings settings = _settings;
+                    int maxKbps = DefaultBitrateKbps(settings.MaxHeight, settings.Fps);
                     int suggested = Math.Min(maxKbps, _engine.SuggestedBitrateKbps(maxKbps));
-                    if (encoder == null || encoder.Width != (frame.Width & ~1) || encoder.Height != (frame.Height & ~1))
+                    if (_sourceSwitched)
+                    {
+                        _sourceSwitched = false;
+                        lastKeyframeMs = -100000;
+                    }
+                    if (encoder == null || encoder.Width != (frame.Width & ~1) || encoder.Height != (frame.Height & ~1) || encoderFps != settings.Fps)
                     {
                         if (encoder != null) encoder.Dispose();
+                        encoder = null;
                         kbps = suggested;
-                        encoder = VideoEncoderFactory.Create(frame.Width, frame.Height, _settings.Fps, kbps, allowHardware);
+                        encoderFps = settings.Fps;
+                        encoder = VideoEncoderFactory.Create(frame.Width, frame.Height, settings.Fps, kbps, allowHardware);
                         EncoderName = encoder.Name;
                         lastKeyframeMs = -100000;
                     }

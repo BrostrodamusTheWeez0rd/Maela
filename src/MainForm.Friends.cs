@@ -160,6 +160,7 @@ namespace Maela
                 UpdateFriendsBar();
                 TickFriendCall();
                 UseHostRoomName();
+                UseHostRoomArt();
                 string name = _preferences.DisplayName;
                 if (name != _sentFriendName)
                 {
@@ -653,6 +654,100 @@ namespace Maela
                 UpdateSelectedRoomUi();
             }
             ShowTrayOrFlash(message);
+        }
+
+        // ----- Room name and art (host only) -----
+
+        private bool IsHostingNow(SavedRoom room)
+        {
+            VoipEngine engine = _engine;
+            return engine != null && engine.IsRunning && engine.IsHost && (Object.ReferenceEquals(room, _activeSavedRoom) || Object.ReferenceEquals(room, _selectedRoom));
+        }
+
+        private void RenameRoom(SavedRoom room)
+        {
+            string value = TextPrompt.Show(this, "Rename room", "Room name", room.Name);
+            if (value == null)
+                return;
+            string name = VoipEngine.CleanRoomName(value);
+            if (name.Length == 0)
+                return;
+            room.Name = name;
+            SavedRoomStore.Save(_savedRooms);
+            if (IsHostingNow(room))
+            {
+                _activeRoomName = name;
+                _engine.SetRoomName(name);
+            }
+            RebuildRoomList(room);
+            UpdateSelectedRoomUi();
+        }
+
+        private void ChooseRoomArt(SavedRoom room, int kind)
+        {
+            using (OpenFileDialog open = new OpenFileDialog())
+            {
+                open.Title = kind == RoomArt.Icon ? "Choose a room picture" : "Choose a room banner (wide pictures work best)";
+                open.Filter = "Pictures|*.png;*.jpg;*.jpeg;*.bmp;*.gif|All files|*.*";
+                if (open.ShowDialog(this) != DialogResult.OK)
+                    return;
+                try
+                {
+                    byte[] pixels = kind == RoomArt.Icon
+                        ? ProfilePicture.FromFile(open.FileName, RoomArt.IconSize, RoomArt.IconSize)
+                        : ProfilePicture.FromFile(open.FileName, RoomArt.BannerWidth, RoomArt.BannerHeight);
+                    byte[] blob = RoomArt.Pack(kind, pixels);
+                    if (blob == null)
+                        throw new InvalidOperationException("That picture is too detailed to share. Try a simpler one.");
+                    if (kind == RoomArt.Icon)
+                        SetOwnRoomArt(room, blob, room.BannerBlob);
+                    else
+                        SetOwnRoomArt(room, room.IconBlob, blob);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex is InvalidOperationException ? ex.Message : "That file couldn't be opened as a picture.", "Room picture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
+        private void SetOwnRoomArt(SavedRoom room, byte[] icon, byte[] banner)
+        {
+            room.SetArt(icon, banner);
+            SavedRoomStore.Save(_savedRooms);
+            if (IsHostingNow(room))
+                _engine.SetRoomArt(icon, banner);
+            RebuildRoomList(room);
+            RefreshShell(_engine);
+        }
+
+        private VoipEngine _artEngineSeen;
+        private int _artVersionSeen = -1;
+
+        /// <summary>Members: keeps the host's art with the saved room, so its tile shows it offline too.</summary>
+        private void UseHostRoomArt()
+        {
+            VoipEngine engine = _engine;
+            if (engine == null || engine.IsHost || !engine.IsConnected || _callFriendId != null)
+                return;
+            int version = engine.RoomArtVersion;
+            if (Object.ReferenceEquals(engine, _artEngineSeen) && version == _artVersionSeen)
+                return;
+            _artEngineSeen = engine;
+            _artVersionSeen = version;
+            SavedRoom room = _activeSavedRoom ?? _selectedRoom;
+            if (room == null)
+                return;
+            byte[] icon = engine.GetRoomArt(RoomArt.Icon), banner = engine.GetRoomArt(RoomArt.Banner);
+            if (RoomArt.VersionOf(icon) == RoomArt.VersionOf(room.IconBlob) && RoomArt.VersionOf(banner) == RoomArt.VersionOf(room.BannerBlob))
+                return;
+            room.SetArt(icon, banner);
+            if (_savedRooms.Contains(room))
+            {
+                SavedRoomStore.Save(_savedRooms);
+                RebuildRoomList(room);
+            }
+            _rail.Invalidate();
         }
 
         /// <summary>Rooms carry the name their host gave them, for everyone in them.</summary>

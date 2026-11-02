@@ -80,17 +80,53 @@ namespace Maela
             VoipEngine engine = _engine;
             if (engine == null || !engine.IsInVoice || _shareSettings == null)
                 return;
-            Size size = _shareSettings.Source.IsWindow
-                ? FrameScaler.Fit(_shareSettings.Source.Bounds.Width, _shareSettings.Source.Bounds.Height, _shareSettings.MaxHeight)
-                : FrameScaler.Fit(_shareSettings.Source.Bounds.Width, _shareSettings.Source.Bounds.Height, _shareSettings.MaxHeight);
-            int width = Math.Max(160, size.Width), height = Math.Max(120, size.Height);
-            if (!engine.StartScreenShare(width, height, _shareSettings.Fps))
+            Size size = StreamSize(_shareSettings);
+            if (!engine.StartScreenShare(size.Width, size.Height, _shareSettings.Fps))
             {
                 MessageBox.Show(this, "That screen size isn't supported for sharing.", "Share screen", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             _shareSender = new ScreenShareSender(engine, _shareSettings);
             PlaySound(SoundCue.Unmute);
+            RefreshShell(engine);
+        }
+
+        private static Size StreamSize(ShareSettings settings)
+        {
+            Size size = FrameScaler.Fit(settings.Source.Bounds.Width, settings.Source.Bounds.Height, settings.MaxHeight);
+            return new Size(Math.Max(160, size.Width), Math.Max(120, size.Height));
+        }
+
+        /// <summary>Change what you're sharing or its quality while live. Viewers stay connected.</summary>
+        private void ChangeSharingClicked()
+        {
+            VoipEngine engine = _engine;
+            if (engine == null || _shareSender == null || _shareSettings == null)
+                return;
+            ShareSettings chosen;
+            using (ShareScreenDialog dialog = new ShareScreenDialog(_shareSettings.MaxHeight, _shareSettings.Fps, _shareSettings.ShareAudio, _shareSettings))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Settings.Source == null)
+                    return;
+                chosen = dialog.Settings;
+            }
+            if (_shareSender == null || !engine.IsSharingScreen)
+                return; // The stream ended while the dialog was open.
+            if (ScreenShareSender.SameSource(chosen.Source, _shareSettings.Source) && chosen.MaxHeight == _shareSettings.MaxHeight && chosen.Fps == _shareSettings.Fps
+                && chosen.ShowCursor == _shareSettings.ShowCursor && chosen.ShareAudio == _shareSettings.ShareAudio)
+                return;
+            Size size = StreamSize(chosen);
+            if (!engine.UpdateScreenShare(size.Width, size.Height, chosen.Fps))
+            {
+                MessageBox.Show(this, "That screen size isn't supported for sharing.", "Share screen", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            _preferences.ShareHeight = chosen.MaxHeight;
+            _preferences.ShareFps = chosen.Fps;
+            _preferences.ShareAudio = chosen.ShareAudio;
+            PreferencesStore.Save(_preferences);
+            _shareSettings = chosen;
+            _shareSender.Apply(chosen);
             RefreshShell(engine);
         }
 
@@ -101,8 +137,11 @@ namespace Maela
             if (_shareSender == null)
                 return;
             if (_preview != null && !_preview.IsDisposed) { _preview.Activate(); return; }
-            ScreenShareSender sender = _shareSender;
-            _preview = new SharePreviewForm(delegate { return sender.LatestPreview; });
+            _preview = new SharePreviewForm(delegate
+            {
+                ScreenShareSender sender = _shareSender;
+                return sender == null ? null : sender.LatestPreview;
+            });
             _preview.Show(this);
         }
 
@@ -323,9 +362,12 @@ namespace Maela
         private readonly ToggleSwitch _audio;
         public readonly ShareSettings Settings = new ShareSettings();
 
-        public ShareScreenDialog(int height, int fps, bool audio) : base("Share screen", 560, 640)
+        /// <param name="current">While live: what you're sharing now, to change it.</param>
+        public ShareScreenDialog(int height, int fps, bool audio, ShareSettings current = null) : base("Share screen", 560, 640)
         {
-            AddHeading("Share your screen", "People in your voice channel can choose to watch. Sharing one window keeps everything else private.");
+            AddHeading(current == null ? "Share your screen" : "Change your stream", current == null
+                ? "People in your voice channel can choose to watch. Sharing one window keeps everything else private."
+                : "People watching stay connected and switch over in a moment.");
             AddFieldLabel("What to share", Margin_X, Cursor_Y);
             Cursor_Y += 22;
             _sources.SetBounds(Margin_X, Cursor_Y, ClientSize.Width - Margin_X * 2, 200);
@@ -342,6 +384,16 @@ namespace Maela
             if (windows.Count > 0) _sources.Items.Add("WINDOWS");
             foreach (CaptureSource s in windows) _sources.Items.Add(s);
             _sources.SelectedIndex = 0;
+            if (current != null)
+            {
+                for (int i = 0; i < _sources.Items.Count; i++)
+                {
+                    CaptureSource candidate = _sources.Items[i] as CaptureSource;
+                    if (candidate != null && candidate.IsWindow == current.Source.IsWindow
+                        && (candidate.IsWindow ? candidate.Window == current.Source.Window : candidate.MonitorDevice == current.Source.MonitorDevice))
+                        _sources.SelectedIndex = i;
+                }
+            }
             _sources.DoubleClick += delegate { if (_sources.SelectedItem is CaptureSource) { DialogResult = DialogResult.OK; } };
             Controls.Add(_sources);
             Cursor_Y += 212;
@@ -357,13 +409,13 @@ namespace Maela
             Style(_quality); _quality.SetBounds(Margin_X, Cursor_Y, half, 28); Controls.Add(_quality);
             Style(_rate); _rate.SetBounds(Margin_X + half + 16, Cursor_Y, half, 28); Controls.Add(_rate);
             Cursor_Y += 44;
-            _cursor = AddToggle("Show my mouse pointer", null, true);
+            _cursor = AddToggle("Show my mouse pointer", null, current == null || current.ShowCursor);
             _audio = AddToggle("Share sound", "Never includes the voice chat. A window shares only its own program's sound.", audio);
             AddText("Higher quality needs more upload speed: about 10 Mbps per viewer at 1080p60. mæla lowers quality automatically if a viewer can't keep up.",
                 Theme.Current.Muted, ClientSize.Width - Margin_X * 2).Font = Ui.Small;
 
             FlatButton cancel = new FlatButton(); cancel.Text = "Cancel"; cancel.DialogResult = DialogResult.Cancel;
-            FlatButton go = new FlatButton(); go.Text = "Go live"; go.DialogResult = DialogResult.OK;
+            FlatButton go = new FlatButton(); go.Text = current == null ? "Go live" : "Apply"; go.DialogResult = DialogResult.OK;
             AddButtons(cancel, go);
             FormClosing += delegate(object s, FormClosingEventArgs e)
             {
@@ -460,6 +512,7 @@ namespace Maela
         public readonly FlatButton StopButton = new FlatButton();
         public readonly FlatButton PreviewButton = new FlatButton();
         public readonly FlatButton StatsButton = new FlatButton();
+        public readonly FlatButton ChangeButton = new FlatButton();
         public bool StatsVisible;
 
         public LiveBar()
@@ -479,6 +532,10 @@ namespace Maela
             StatsButton.Size = new Size(70, 28);
             StatsButton.Click += delegate { StatsVisible = !StatsVisible; };
             Controls.Add(StatsButton);
+            ChangeButton.Look = ButtonLook.Secondary;
+            ChangeButton.Text = "Change";
+            ChangeButton.Size = new Size(80, 28);
+            Controls.Add(ChangeButton);
         }
 
         protected override void OnLayout(LayoutEventArgs e)
@@ -487,6 +544,7 @@ namespace Maela
             StopButton.Location = new Point(Width - StopButton.Width - 12, 6);
             PreviewButton.Location = new Point(StopButton.Left - PreviewButton.Width - 8, 6);
             StatsButton.Location = new Point(PreviewButton.Left - StatsButton.Width - 8, 6);
+            ChangeButton.Location = new Point(StatsButton.Left - ChangeButton.Width - 8, 6);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -496,9 +554,10 @@ namespace Maela
             StopButton.Underlay = t.Danger;
             PreviewButton.Underlay = t.Danger;
             StatsButton.Underlay = t.Danger;
+            ChangeButton.Underlay = t.Danger;
             using (SolidBrush dot = new SolidBrush(Color.White))
                 e.Graphics.FillEllipse(dot, 16, 15, 10, 10);
-            Ui.DrawText(e.Graphics, Text, StatsVisible ? Ui.Small : Ui.BodyBold, new Rectangle(34, 0, Width - 360, Height), Color.White, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.WordBreak);
+            Ui.DrawText(e.Graphics, Text, StatsVisible ? Ui.Small : Ui.BodyBold, new Rectangle(34, 0, Width - 450, Height), Color.White, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.WordBreak);
         }
     }
 }

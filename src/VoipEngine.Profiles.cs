@@ -445,6 +445,7 @@ namespace Maela
         /// <summary>Client maintenance: send our profile until acked, fetch profiles that changed.</summary>
         private void ClientProfileMaintenance(DateTime now)
         {
+            ClientRoomArtMaintenance(now);
             bool resend;
             lock (_stateLock)
                 resend = !_localProfileAcked && _localProfileBlob != null && (now - _localProfileSentUtc).TotalMilliseconds >= 1500.0;

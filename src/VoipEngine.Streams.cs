@@ -255,6 +255,22 @@ namespace Maela
             return true;
         }
 
+        /// <summary>Changes what the stream is while live. Same stream, so viewers stay connected.</summary>
+        public bool UpdateScreenShare(int width, int height, int fps)
+        {
+            if (_localStreamId == 0 || !ValidStreamFormat(width, height, fps))
+                return false;
+            _localStreamWidth = width;
+            _localStreamHeight = height;
+            _localStreamFps = fps;
+            _keyframeRequested = true;
+            _videoCapBytes = 0;
+            lock (_stateLock)
+                _bitrate = null; // Starts again from what the new settings allow.
+            AnnounceStream();
+            return true;
+        }
+
         public void StopScreenShare()
         {
             if (_localStreamId == 0)
@@ -806,6 +822,7 @@ namespace Maela
         private void SetHostStream(uint memberId, uint streamId, int width, int height, int fps)
         {
             List<HostWatch> ended = new List<HostWatch>();
+            bool changedOnly = false;
             lock (_stateLock)
             {
                 LiveStreamInfo existing;
@@ -819,7 +836,11 @@ namespace Maela
                 else
                 {
                     if (existing != null && existing.StreamId == streamId)
-                        return; // Repeat.
+                    {
+                        if (existing.Width == width && existing.Height == height && existing.Fps == fps)
+                            return; // Repeat.
+                        changedOnly = true; // Same stream with new settings: viewers carry on.
+                    }
                     LiveStreamInfo info = new LiveStreamInfo();
                     info.MemberId = memberId;
                     info.StreamId = streamId;
@@ -828,8 +849,11 @@ namespace Maela
                     info.Fps = fps;
                     _liveStreams[memberId] = info;
                 }
-                foreach (HostWatch w in _hostWatches.Values)
-                    if (w.SharerId == memberId && (existing == null || w.StreamId == existing.StreamId)) ended.Add(w);
+                if (!changedOnly)
+                {
+                    foreach (HostWatch w in _hostWatches.Values)
+                        if (w.SharerId == memberId && (existing == null || w.StreamId == existing.StreamId)) ended.Add(w);
+                }
             }
             foreach (HostWatch w in ended)
                 HostEndWatch(w.SharerId, w.ViewerId);

@@ -304,6 +304,41 @@ namespace Maela
         /// <summary>Hosted rooms: the password to require. Joined rooms: the password to send. Empty = none.</summary>
         public string Password = String.Empty;
 
+        private byte[] _iconBlob, _bannerBlob;
+        private Image _iconImage, _bannerImage;
+
+        /// <summary>The room's picture and banner, as compressed pixels (see RoomArt). Null = none.</summary>
+        public byte[] IconBlob { get { return _iconBlob; } }
+        public byte[] BannerBlob { get { return _bannerBlob; } }
+
+        public void SetArt(byte[] iconBlob, byte[] bannerBlob)
+        {
+            _iconBlob = iconBlob;
+            _bannerBlob = bannerBlob;
+            _iconImage = null;
+            _bannerImage = null;
+        }
+
+        public Image IconImage
+        {
+            get
+            {
+                if (_iconImage == null && _iconBlob != null)
+                    _iconImage = RoomArt.ToImage(RoomArt.Icon, _iconBlob);
+                return _iconImage;
+            }
+        }
+
+        public Image BannerImage
+        {
+            get
+            {
+                if (_bannerImage == null && _bannerBlob != null)
+                    _bannerImage = RoomArt.ToImage(RoomArt.Banner, _bannerBlob);
+                return _bannerImage;
+            }
+        }
+
         public override string ToString()
         {
             return Name;
@@ -446,6 +481,12 @@ namespace Maela
                         byte[] password = SecretStore.Unprotect(parts[7]);
                         room.Password = password == null ? String.Empty : Encoding.UTF8.GetString(password);
                     }
+                    if (parts.Length >= 10)
+                    {
+                        byte[] icon = parts[8].Length > 0 ? Convert.FromBase64String(parts[8]) : null;
+                        byte[] banner = parts[9].Length > 0 ? Convert.FromBase64String(parts[9]) : null;
+                        room.SetArt(RoomArt.Unpack(RoomArt.Icon, icon) != null ? icon : null, RoomArt.Unpack(RoomArt.Banner, banner) != null ? banner : null);
+                    }
                     if (room.Owned && room.ChannelNames.Count == 0)
                         room.ChannelNames.Add("General");
                     if (String.IsNullOrWhiteSpace(room.Name))
@@ -475,7 +516,9 @@ namespace Maela
                         string channelText = room.ChannelNames == null ? String.Empty : String.Join("\n", room.ChannelNames.ToArray());
                         string key = room.HostKey == null ? String.Empty : SecretStore.Protect(room.HostKey);
                         string password = String.IsNullOrEmpty(room.Password) ? String.Empty : SecretStore.Protect(Encoding.UTF8.GetBytes(room.Password));
-                        lines.Add((room.Owned ? "1" : "0") + "|" + room.PreferredPort + "|" + Encode(room.Name) + "|" + Encode(room.Invite) + "|" + (room.KeepAlive ? "1" : "0") + "|" + Encode(channelText) + "|" + key + "|" + password);
+                        lines.Add((room.Owned ? "1" : "0") + "|" + room.PreferredPort + "|" + Encode(room.Name) + "|" + Encode(room.Invite) + "|" + (room.KeepAlive ? "1" : "0") + "|" + Encode(channelText) + "|" + key + "|" + password
+                            + "|" + (room.IconBlob == null ? String.Empty : Convert.ToBase64String(room.IconBlob))
+                            + "|" + (room.BannerBlob == null ? String.Empty : Convert.ToBase64String(room.BannerBlob)));
                     }
                     EncryptedFile.Write(FilePath, Encoding.UTF8.GetBytes(String.Join("\n", lines.ToArray())));
                     return true;
@@ -2669,6 +2712,8 @@ namespace Maela
             if (HandleHostChatPacket(known, packet))
                 return;
 
+            if (HandleHostRoomArtPacket(known, packet))
+                return;
             if (HandleHostProfilePacket(known, packet))
                 return;
 
@@ -2804,6 +2849,8 @@ namespace Maela
             if (HandleClientChatPacket(packet))
                 return;
 
+            if (HandleClientRoomArtPacket(packet))
+                return;
             if (HandleClientProfilePacket(packet))
                 return;
 
@@ -3123,6 +3170,7 @@ namespace Maela
                     writer.Write((byte)roomName.Length);
                     writer.Write(roomName);
                 }
+                WriteRoomArtSection(writer);
             }
 
             writer.Flush();
@@ -3232,6 +3280,13 @@ namespace Maela
                 if (section == PeerListSectionProfiles)
                 {
                     offset = ReadProfileSection(payload, offset, parsedProfiles);
+                    if (offset < 0)
+                        break;
+                    continue;
+                }
+                if (section == PeerListSectionRoomArt)
+                {
+                    offset = ReadRoomArtSection(payload, offset);
                     if (offset < 0)
                         break;
                     continue;

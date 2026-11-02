@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0 - Live stream changes and room art
+
+- **Hosts can dress up their room.** Right-click a room you host to rename it, or set a picture and
+  banner. Everyone in the room sees changes straight away. Rooms show their initials until they have
+  a picture, and each gets its own generated banner until the host picks one. Members need this
+  version to see them.
+- **Change your stream while live.** A Change button on the live bar lets you switch screen or
+  window, quality, frame rate, sound and pointer on the fly, without restarting the stream. People
+  watching stay connected. Changing resolution or frame rate causes one brief hitch.
+
 ## 0.11.3 - Call prompt fix and tidier sharing
 
 - **Tidier screen sharing.** Sharing no longer allocates a new full-size preview frame 10 times a

@@ -403,7 +403,19 @@ namespace Maela
                     g.SmoothingMode = SmoothingMode.AntiAlias;
                     g.FillPath(brush, path);
                 }
-                Ui.DrawText(g, Initials(room.Name), Ui.BodyBold, r, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                Image picture = room.IconImage;
+                if (picture != null)
+                {
+                    using (GraphicsPath clip = Ui.RoundRect(r, selected || _hover == i ? 15 : 18))
+                    {
+                        g.SetClip(clip);
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(picture, r);
+                        g.ResetClip();
+                    }
+                }
+                else
+                    Ui.DrawText(g, Initials(room.Name), Ui.BodyBold, r, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 
                 if (selected || _hover == i)
                 {

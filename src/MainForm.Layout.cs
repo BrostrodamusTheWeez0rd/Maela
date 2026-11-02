@@ -199,6 +199,7 @@ namespace Maela
             _liveBar.Visible = false;
             _liveBar.StopButton.Click += delegate { StopSharing(); RefreshShell(_engine); };
             _liveBar.PreviewButton.Click += delegate { ShowSharePreview(); };
+            _liveBar.ChangeButton.Click += delegate { ChangeSharingClicked(); };
             _main.Controls.Add(_liveBar);
             _liveBar.SendToBack(); // Above the header.
 
@@ -260,6 +261,7 @@ namespace Maela
             bool connected = running && engine.IsConnected;
             bool inVoice = connected && engine.IsInVoice;
             SavedRoom room = _selectedRoom ?? _activeSavedRoom;
+            _roomHeader.SetBanner(room == null ? null : room.BannerImage, running ? _activeRoomName : (room == null ? String.Empty : room.Name));
 
             _home.Visible = !running;
             _composer.Visible = running;
@@ -546,12 +548,25 @@ namespace Maela
         private bool _online;
         private bool _secure;
         private bool _hover;
+        private Image _banner;
+        private string _bannerName = String.Empty;
+        private const int BannerHeight = 67; // The sidebar's width at the banner's shape.
 
         public SidebarHeader()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-            Height = 72;
+            Height = 72 + BannerHeight;
             Cursor = Cursors.Hand;
+        }
+
+        /// <summary>The host's banner, or null for the stock one made from the room's name.</summary>
+        public void SetBanner(Image banner, string roomName)
+        {
+            if (Object.ReferenceEquals(banner, _banner) && roomName == _bannerName)
+                return;
+            _banner = banner;
+            _bannerName = roomName ?? String.Empty;
+            Invalidate();
         }
 
         public void SetState(string title, string line, bool online, bool secure)
@@ -576,29 +591,33 @@ namespace Maela
             using (Pen line = new Pen(t.Line))
                 g.DrawLine(line, 0, Height - 1, Width, Height - 1);
 
+            Image banner = _banner ?? RoomArt.StockBanner(_bannerName);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(banner, new Rectangle(0, 0, Width, BannerHeight));
+
             int badgeWidth = 0;
             if (_secure)
             {
                 Size s = Ui.Measure(g, "Encrypted", Ui.Tiny);
                 badgeWidth = s.Width + 26;
-                Rectangle badge = new Rectangle(Width - badgeWidth - 14, 16, badgeWidth, 20);
+                Rectangle badge = new Rectangle(Width - badgeWidth - 14, BannerHeight + 16, badgeWidth, 20);
                 Ui.FillRound(g, Ui.Mix(t.Side, t.Accent, t.Dark ? 0.18f : 0.12f), badge, 10);
                 Icons.Draw(g, IconKind.Lock, new RectangleF(badge.X + 7, badge.Y + 5, 10, 10), t.Accent2);
                 Ui.DrawText(g, "Encrypted", Ui.Tiny, new Point(badge.X + 20, badge.Y + 3), t.Accent2);
             }
-            Ui.DrawText(g, _title, Ui.Title, new Rectangle(16, 12, Width - 32 - badgeWidth, 26), t.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            Ui.DrawText(g, _title, Ui.Title, new Rectangle(16, BannerHeight + 12, Width - 32 - badgeWidth, 26), t.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
             int x = 16;
             if (_online)
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 using (SolidBrush glow = new SolidBrush(Ui.Mix(t.Side, t.Good, 0.25f)))
-                    g.FillEllipse(glow, x - 2, 44, 12, 12);
+                    g.FillEllipse(glow, x - 2, BannerHeight + 44, 12, 12);
                 using (SolidBrush dot = new SolidBrush(t.Good))
-                    g.FillEllipse(dot, x, 46, 8, 8);
+                    g.FillEllipse(dot, x, BannerHeight + 46, 8, 8);
                 x += 14;
             }
-            Ui.DrawText(g, _line, Ui.Small, new Rectangle(x, 40, Width - x - 14, 18), t.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            Ui.DrawText(g, _line, Ui.Small, new Rectangle(x, BannerHeight + 40, Width - x - 14, 18), t.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
     }
 

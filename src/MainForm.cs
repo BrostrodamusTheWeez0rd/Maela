@@ -606,6 +606,17 @@ namespace Maela
                 _roomMenu.Items.Add(recheck);
             }
 
+            if (room.Owned)
+            {
+                _roomMenu.Items.Add(new ToolStripMenuItem("Rename room...", null, delegate { RenameRoom(room); }));
+                _roomMenu.Items.Add(new ToolStripMenuItem("Set room picture...", null, delegate { ChooseRoomArt(room, RoomArt.Icon); }));
+                if (room.IconBlob != null)
+                    _roomMenu.Items.Add(new ToolStripMenuItem("Remove room picture", null, delegate { SetOwnRoomArt(room, null, room.BannerBlob); }));
+                _roomMenu.Items.Add(new ToolStripMenuItem("Set room banner...", null, delegate { ChooseRoomArt(room, RoomArt.Banner); }));
+                if (room.BannerBlob != null)
+                    _roomMenu.Items.Add(new ToolStripMenuItem("Remove room banner", null, delegate { SetOwnRoomArt(room, room.IconBlob, null); }));
+            }
+
             ToolStripMenuItem password = new ToolStripMenuItem(room.Owned ? "Set room password..." : "Room password...");
             password.Click += delegate
             {
@@ -769,6 +780,7 @@ namespace Maela
                         SavedRoomStore.Save(_savedRooms);
                 }
                 _engine.StartHost(requestedPort, displayName, roomName, room.ChannelNames, room.HostKey, room.Password);
+                _engine.SetRoomArt(room.IconBlob, room.BannerBlob);
                 _localBoundPort = _engine.BoundPort;
                 _activeSavedRoom = saved ? room : null;
                 _activeRoomName = roomName;
@@ -814,6 +826,7 @@ namespace Maela
 
                 _engine = new VoipEngine(_preferences.InputDeviceId, _preferences.OutputDeviceId);
                 ApplyPreferencesToEngine();
+                _engine.SetRoomArt(room.IconBlob, room.BannerBlob); // A saved copy: only fetched again if it changed.
                 _engine.StartClient(new IPEndPoint(hostIp, port), ValidateName(_preferences.DisplayName), fingerprint, room.Password);
                 _activeSavedRoom = room.Owned ? null : room;
                 _activeRoomName = room.Name;

@@ -26,6 +26,7 @@ Before tagging a public build:
 - [ ] The top rail button swaps room tiles for friend tiles in the same row, and clicking one opens the chat; + adds a friend and right-click blocks or removes; the room card and name bar stay; the labels swap; the button goes back, with nothing overlapping after switching back and forth; the badge counts unread and requests; during a call, Friends offers a way back to it.
 - [ ] Joining asks for no name; the room takes the host's name, for saved rooms too, and a host renaming shows for members next time they connect.
 - [ ] Friends looks right in each theme, and blocking and removing work from the right-click menu.
+- [ ] Host can rename a room and set and remove its picture and banner, offline and while hosting; members see each change without rejoining, and saved copies show offline. Without a picture a room shows initials, and without a banner a generated one.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.
 - [ ] Audio is only delivered inside the current voice channel.
@@ -68,6 +69,7 @@ Before tagging a public build:
       the red bar shows viewers; Stop works; leaving voice stops sharing.
 - [ ] Watch: LIVE badge, double-click and the card's Watch stream open the viewer; full screen
       works; the picture is smooth at 1080p60 between two PCs on different networks.
+- [ ] Change on the live bar: switching screen, window, quality and frame rate keeps viewers connected, including going from below 1080p to above and back, with GPU and processor decoding.
 - [ ] The screen sharing notice appears until Don't show me again is on; Cancel stops; "always through the host" in Settings works.
 - [ ] Settings > Licenses shows the MIT license and third-party notices.
 - [ ] `package_release.cmd` produces the expected release ZIP.
