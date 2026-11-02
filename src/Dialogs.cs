@@ -522,6 +522,7 @@ namespace Maela
         private readonly List<Panel> _pages = new List<Panel>();
         private readonly FlatButton _back = new FlatButton();
         private readonly FlatButton _next = new FlatButton();
+        private readonly FlatButton _skip = new FlatButton();
         private readonly Label _where = new Label();
         private int _page;
 
@@ -609,8 +610,14 @@ namespace Maela
             _where.AutoSize = false;
             _where.Font = Ui.Small;
             _where.ForeColor = Theme.Current.Muted;
-            _where.SetBounds(Margin_X, ClientSize.Height - 48, 200, 20);
+            _where.SetBounds(Margin_X, ClientSize.Height - 48, 120, 20);
             Controls.Add(_where);
+            // Straight to the choice of layout, for anyone who'd rather not read the tour.
+            _skip.Text = "Skip tour";
+            _skip.Look = ButtonLook.Ghost;
+            _skip.SetBounds(ClientSize.Width - Margin_X - 180 - 10 - 96 - 10 - 110, ClientSize.Height - 58, 110, 38);
+            _skip.Click += delegate { Show(_pages.Count - 1); };
+            Controls.Add(_skip);
             _back.Text = "Back";
             _back.Look = ButtonLook.Secondary;
             _back.SetBounds(ClientSize.Width - Margin_X - 96 - 10 - 180, ClientSize.Height - 58, 96, 38);
@@ -686,6 +693,7 @@ namespace Maela
             for (int i = 0; i < _pages.Count; i++)
                 _pages[i].Visible = i == _page;
             _back.Visible = _page > 0;
+            _skip.Visible = _page < _pages.Count - 1;
             _next.Text = _page == _pages.Count - 1 ? "Start using mæla" : "Next";
             _next.Invalidate();
             _where.Text = (_page + 1) + " of " + _pages.Count;

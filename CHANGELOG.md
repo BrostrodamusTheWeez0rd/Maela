@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1 - Skip the tour
+
+- **Skip tour.** The tour of what's new now has a Skip tour button that goes straight to choosing
+  your layout.
+
 ## 0.13.0 - The Dynamic layout
 
 The biggest update yet: a whole new way to get around, a much stronger noise filter, pictures in
