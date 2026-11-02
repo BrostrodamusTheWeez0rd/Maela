@@ -40,6 +40,13 @@ namespace Maela
             _handle = handle;
         }
 
+        public static void ShowMenu(List<SpatialMenuEntry> entries)
+        {
+            Dispatcher dispatcher = _dispatcher;
+            if (dispatcher != null)
+                dispatcher.BeginInvoke((Action)delegate { if (_window != null) _window.ShowMenu(entries); });
+        }
+
         public static void HideWindow()
         {
             Dispatcher dispatcher = _dispatcher;
@@ -105,7 +112,8 @@ namespace Maela
             dispatcher.UnhandledException += delegate(object s, DispatcherUnhandledExceptionEventArgs e)
             {
                 e.Handled = true;
-                MessageBox.Show("The Spatial window ran into a problem, so mæla is switching to the Classic layout. Your room or call keeps running.\n\n" + e.Exception.Message, "mæla");
+                Program.LogCrash(e.Exception);
+                MessageBox.Show("The Spatial window ran into a problem, so mæla is switching to the Lightweight layout. Your room or call keeps running.\n\n" + e.Exception.Message, "mæla");
                 dispatcher.InvokeShutdown();
             };
             try
@@ -118,7 +126,7 @@ namespace Maela
             }
             catch (Exception ex)
             {
-                MessageBox.Show("The Spatial window could not open, so mæla is switching to the Classic layout.\n\n" + ex.Message, "mæla");
+                MessageBox.Show("The Spatial window could not open, so mæla is switching to the Lightweight layout.\n\n" + ex.Message, "mæla");
             }
             lock (Gate)
             {
@@ -176,6 +184,16 @@ namespace Maela
         public DateTime TimeUtc;
         public ulong ReactKey; // The message's sequence or id. 0: it can't be reacted to yet.
         public readonly List<SpatialReaction> Reactions = new List<SpatialReaction>();
+    }
+
+    /// <summary>One line of a right-click menu, copied from the Classic menu that does the work.</summary>
+    internal sealed class SpatialMenuEntry
+    {
+        public int Id;
+        public string Text;
+        public bool Enabled, Checked, Separator;
+        public ImageSource Picture;
+        public List<SpatialMenuEntry> Children;
     }
 
     internal sealed class SpatialReaction
@@ -264,6 +282,10 @@ namespace Maela
         public bool IsGroupLabel;   // Dragging this moves the circle.
         public Line Link;
         public double Extent; // Big things stay drawn until all of them are off screen.
+        public double WrapRadius; // Rooms and channels: the ball's radius, for the dots to wrap.
+        public ScaleTransform BallScale; // Grows the ball, not its name, while it's targeted.
+        public double Grow;              // 0 to 1: how far it has grown.
+        public double ScreenX, ScreenY, ScreenScale; // Where it was last drawn.
         public bool OnScreen = true;
     }
 
@@ -274,11 +296,25 @@ namespace Maela
         private const double Reach = 190;
         private readonly double[] _x = new double[Count], _y = new double[Count], _d = new double[Count];
         private readonly double[] _nearX = new double[Count], _nearY = new double[Count], _nearP = new double[Count];
+        private readonly double[] _edgeX = new double[Count], _edgeY = new double[Count];
         private readonly Brush[] _dots = new Brush[8];
         private readonly Pen[] _toPointer = new Pen[8];
         private readonly Pen[] _between = new Pen[8];
         public Point Pointer = new Point(-9999, -9999);
         public double DriftX, DriftY;
+
+        // What the lines reach for: the pointer, or a ball's edge when one is wrapped. It glides
+        // between them just as the lines follow the pointer, and grows to the ball's size.
+        public bool Wrapping;
+        public Point WrapTarget;
+        public double WrapTargetRadius;
+        private Point _focus = new Point(-9999, -9999);
+        private double _focusRadius;
+        private double _arrived; // 0 to 1: how far the focus has got onto the ball. The highlight follows this.
+
+        public double Arrived { get { return _arrived; } }
+        private readonly Pen[] _wrapPens = new Pen[8];  // Brighter lines while a ball is wrapped.
+        private readonly Pen[] _haloPens = new Pen[8];  // The soft glow just outside it.
 
         public SpatialStars()
         {
@@ -311,6 +347,14 @@ namespace Maela
                 b.Freeze();
                 _between[i] = new Pen(b, 1);
                 _between[i].Freeze();
+                SolidColorBrush bright = new SolidColorBrush(Color.FromArgb((byte)(50 + i * 29), accent.R, accent.G, accent.B));
+                bright.Freeze();
+                _wrapPens[i] = new Pen(bright, 1.7);
+                _wrapPens[i].Freeze();
+                SolidColorBrush glow = new SolidColorBrush(Color.FromArgb((byte)(i * 9), accent.R, accent.G, accent.B));
+                glow.Freeze();
+                _haloPens[i] = new Pen(glow, 10);
+                _haloPens[i].Freeze();
             }
             InvalidateVisual();
         }
@@ -324,6 +368,33 @@ namespace Maela
                 if (_y[i] < 0)
                     _y[i] = 1;
             }
+            Point target = Wrapping ? WrapTarget : Pointer;
+            double targetRadius = Wrapping ? WrapTargetRadius : 0;
+            bool away = target.X < -9000 || _focus.X < -9000;
+            bool settled = !Wrapping && _focusRadius < 0.5 && Math.Abs(_focus.X - target.X) + Math.Abs(_focus.Y - target.Y) < 3;
+            if (away || settled)
+            {
+                // Plain pointer: follow it exactly, as before.
+                _focus = target;
+                _focusRadius = targetRadius;
+            }
+            else
+            {
+                double glide = Math.Min(1, seconds * 5);
+                _focus = new Point(_focus.X + (target.X - _focus.X) * glide, _focus.Y + (target.Y - _focus.Y) * glide);
+                _focusRadius += (targetRadius - _focusRadius) * glide;
+            }
+            // The highlight builds as the focus reaches the ball, and fades as it leaves.
+            double arrived = 0;
+            if (Wrapping && WrapTargetRadius > 0)
+            {
+                double fx = _focus.X - WrapTarget.X, fy = _focus.Y - WrapTarget.Y;
+                double distance = Math.Sqrt(fx * fx + fy * fy) / (WrapTargetRadius + 40);
+                arrived = Math.Max(0, 1 - distance) * Math.Min(1, _focusRadius / WrapTargetRadius);
+            }
+            _arrived += (arrived - _arrived) * Math.Min(1, seconds * 8);
+            if (_arrived < 0.005)
+                _arrived = 0;
             InvalidateVisual();
         }
 
@@ -333,38 +404,55 @@ namespace Maela
             return level < 0 ? 0 : (level > 7 ? 7 : level);
         }
 
+        /// <summary>
+        /// Dots near the focus lean towards it and draw lines to it. Normally the focus is the
+        /// pointer. Over a room or channel it glides onto the ball and grows to its size, so the
+        /// dots reach for the nearest point on its edge instead, and the lines land all round it.
+        /// </summary>
         protected override void OnRender(DrawingContext dc)
         {
             double w = ActualWidth, h = ActualHeight;
+            double reach = Reach + _focusRadius; // A bigger ball draws from further out.
+            double lean = 0.14 + 0.12 * _arrived; // And holds its dots a little closer.
             int near = 0, i, j;
             for (i = 0; i < Count; i++)
             {
                 double sx = Wrap(_x[i] - DriftX * 0.05 * _d[i]) * w;
                 double sy = Wrap(_y[i] - DriftY * 0.05 * _d[i]) * h;
-                double dx = Pointer.X - sx, dy = Pointer.Y - sy;
+                double dx = sx - _focus.X, dy = sy - _focus.Y;
                 double dist = Math.Sqrt(dx * dx + dy * dy), pull = 0;
-                if (dist < Reach)
+                double gap = Math.Max(0, dist - _focusRadius);
+                if (gap < reach && dist > 0.001)
                 {
-                    pull = 1 - dist / Reach;
-                    sx += dx * pull * 0.14;
-                    sy += dy * pull * 0.14;
+                    pull = 1 - gap / reach;
+                    // The nearest point on the ball's edge; with no ball, the pointer itself.
+                    double ex = _focus.X + dx / dist * _focusRadius, ey = _focus.Y + dy / dist * _focusRadius;
+                    sx += (ex - sx) * pull * lean;
+                    sy += (ey - sy) * pull * lean;
                     _nearX[near] = sx;
                     _nearY[near] = sy;
                     _nearP[near] = pull;
+                    _edgeX[near] = ex;
+                    _edgeY[near] = ey;
                     near++;
                 }
                 double radius = _d[i] * 1.5 + pull * 1.4;
                 dc.DrawEllipse(_dots[Level(0.15 + _d[i] * 0.5 + pull * 0.5)], null, new Point(sx, sy), radius, radius);
             }
-            // Only dots near the pointer link up, so this is a handful of lines, not every dot against every dot.
+            if (_arrived > 0)
+                dc.DrawEllipse(null, _haloPens[Level(_arrived * 0.9)], _focus, _focusRadius + 7, _focusRadius + 7);
+
+            // Only dots near the focus link up, so this is a handful of lines, not every dot against every dot.
+            Pen[] reaching = _arrived > 0.5 ? _wrapPens : _toPointer;
+            double link = 110 + _focusRadius * 0.6; // Round a ball, longer links so the net closes.
             for (i = 0; i < near; i++)
             {
-                dc.DrawLine(_toPointer[Level(_nearP[i] * 0.9)], new Point(_nearX[i], _nearY[i]), Pointer);
+                dc.DrawLine(reaching[Level(_nearP[i] * 0.9)], new Point(_nearX[i], _nearY[i]), new Point(_edgeX[i], _edgeY[i]));
                 for (j = i + 1; j < near; j++)
                 {
-                    double ex = _nearX[i] - _nearX[j], ey = _nearY[i] - _nearY[j], q = ex * ex + ey * ey;
-                    if (q < 12100)
-                        dc.DrawLine(_between[Level((1 - Math.Sqrt(q) / 110) * Math.Min(_nearP[i], _nearP[j]) * 1.2)], new Point(_nearX[i], _nearY[i]), new Point(_nearX[j], _nearY[j]));
+                    double ex = _nearX[i] - _nearX[j], ey = _nearY[i] - _nearY[j], q = Math.Sqrt(ex * ex + ey * ey);
+                    if (q < link)
+                        dc.DrawLine(_between[Level((1 - q / link) * Math.Min(_nearP[i], _nearP[j]) * 1.2)], new Point(_nearX[i], _nearY[i]), new Point(_nearX[j], _nearY[j]));
                 }
             }
         }
@@ -386,50 +474,77 @@ namespace Maela
         private static bool _darkPalette;
         private string _themeId;
 
-        private static Color Hex(int value)
-        {
-            return Color.FromRgb((byte)(value >> 16), (byte)(value >> 8), (byte)value);
-        }
-
         /// <summary>The same colour, see-through: panels over the space.</summary>
         private static Color Fade(Color color, byte alpha)
         {
             return Color.FromArgb(alpha, color.R, color.G, color.B);
         }
 
+        private static Color FromTheme(System.Drawing.Color colour)
+        {
+            return Color.FromRgb(colour.R, colour.G, colour.B);
+        }
+
+        /// <summary>
+        /// Spatial's palette comes from the same theme Classic uses, so a colour option only has to
+        /// be defined once. The space itself sits a little darker (or lighter) than Classic's rail.
+        /// </summary>
         private static void UsePalette(string themeId)
         {
-            Good = Hex(0x35E08A);
-            Bad = Hex(0xFF3D5E);
-            _darkPalette = true;
-            TextCol = Hex(0xEEF1FA); Text2 = Hex(0xBCC3D8); Muted = Hex(0x8089A3);
-            LineCol = Color.FromArgb(0x24, 0xAA, 0xBE, 0xFF);
-            switch (themeId)
+            Theme theme = Theme.ById(themeId);
+            _darkPalette = theme.Dark;
+            Void = _darkPalette ? Mix(FromTheme(theme.Rail), Colors.Black, 0.4) : Mix(FromTheme(theme.Rail), Colors.White, 0.35);
+            SolidBg = FromTheme(theme.Side);
+            Raise = FromTheme(theme.Surface);
+            TextCol = FromTheme(theme.Text);
+            Text2 = FromTheme(theme.Text2);
+            Muted = FromTheme(theme.Muted);
+            LineCol = Fade(TextCol, _darkPalette ? (byte)0x24 : (byte)0x30);
+            AccentCol = FromTheme(theme.Logo);
+            Accent2 = FromTheme(theme.Second);
+            Warm = FromTheme(theme.Warm);
+            Good = FromTheme(theme.Good);
+            Bad = FromTheme(theme.Danger);
+            OnAccent = FromTheme(theme.OnAccent);
+        }
+
+        private static System.Windows.Media.Imaging.BitmapSource _markPixels;
+        private ImageSource _mark;
+
+        /// <summary>
+        /// The mæla logo in the theme's accent. Only the hue changes, so the bubble keeps its
+        /// shading and the bars stay white. In Maela Red it looks like the original.
+        /// </summary>
+        private static ImageSource ThemedMark(Color accent)
+        {
+            try
             {
-                case "midnight": // The neon look.
-                    Void = Hex(0x04050B); SolidBg = Hex(0x0D1020); Raise = Hex(0x171B2E);
-                    AccentCol = Hex(0x00E5F5); Accent2 = Hex(0xB35CFF); Warm = Hex(0xFF7A2F); OnAccent = Hex(0x031014);
-                    break;
-                case "oled":
-                    Void = Hex(0x000000); SolidBg = Hex(0x0A090A); Raise = Hex(0x1C1A1B);
-                    TextCol = Hex(0xF6EFF1); Text2 = Hex(0xC9BFC3); Muted = Hex(0x8E8387);
-                    LineCol = Color.FromArgb(0x26, 0xFF, 0xC8, 0xCD);
-                    AccentCol = Hex(0xFF5A60); Accent2 = Hex(0xFF9D6B); Warm = Hex(0xFFB057); OnAccent = Hex(0x1C0507);
-                    break;
-                case "daylight":
-                    _darkPalette = false;
-                    Void = Hex(0xF4F1F2); SolidBg = Hex(0xFFFFFF); Raise = Hex(0xF2EDEF);
-                    TextCol = Hex(0x1D1719); Text2 = Hex(0x3D3337); Muted = Hex(0x7C7074);
-                    LineCol = Color.FromArgb(0x30, 0x3D, 0x33, 0x37);
-                    AccentCol = Hex(0xD93B47); Accent2 = Hex(0x7C6CFF); Warm = Hex(0xF28037); OnAccent = Colors.White;
-                    Good = Hex(0x1F9D63);
-                    break;
-                default: // Maela Red.
-                    Void = Hex(0x090506); SolidBg = Hex(0x171013); Raise = Hex(0x262024);
-                    TextCol = Hex(0xF6EFF1); Text2 = Hex(0xCFC4C8); Muted = Hex(0x94888D);
-                    LineCol = Color.FromArgb(0x24, 0xFF, 0xC8, 0xCD);
-                    AccentCol = Hex(0xFF5A60); Accent2 = Hex(0xFF9D6B); Warm = Hex(0xFFB057); OnAccent = Hex(0x1C0507);
-                    break;
+                if (_markPixels == null)
+                {
+                    using (System.IO.Stream stream = typeof(SpatialWindow).Assembly.GetManifestResourceStream("MaelaMark.png"))
+                    {
+                        if (stream == null)
+                            return null;
+                        System.Windows.Media.Imaging.BitmapDecoder decoder = System.Windows.Media.Imaging.BitmapDecoder.Create(stream, System.Windows.Media.Imaging.BitmapCreateOptions.None, System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+                        System.Windows.Media.Imaging.BitmapSource frame = decoder.Frames[0];
+                        // Small enough to recolour instantly, still sharp at twice the size it's shown.
+                        double scale = 64.0 / frame.PixelWidth;
+                        System.Windows.Media.Imaging.BitmapSource small = new System.Windows.Media.Imaging.TransformedBitmap(frame, new ScaleTransform(scale, scale));
+                        _markPixels = new System.Windows.Media.Imaging.FormatConvertedBitmap(small, PixelFormats.Bgra32, null, 0);
+                        _markPixels.Freeze();
+                    }
+                }
+                int width = _markPixels.PixelWidth, height = _markPixels.PixelHeight, stride = width * 4, i;
+                byte[] pixels = new byte[stride * height];
+                _markPixels.CopyPixels(pixels, stride, 0);
+                Branding.Recolour(pixels, System.Drawing.Color.FromArgb(accent.R, accent.G, accent.B));
+                System.Windows.Media.Imaging.BitmapSource result = System.Windows.Media.Imaging.BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+                result.Freeze();
+                return result;
+            }
+            catch
+            {
+                return null; // The name still shows without it.
             }
         }
 
@@ -438,6 +553,9 @@ namespace Maela
         {
             _themeId = themeId;
             UsePalette(themeId);
+            _mark = ThemedMark(AccentCol);
+            if (_mark != null)
+                Icon = _mark; // Taskbar and title bar.
             Background = new SolidColorBrush(Void);
             Foreground = new SolidColorBrush(TextCol);
             _stars.SetColours(AccentCol, Accent2);
@@ -448,7 +566,6 @@ namespace Maela
             _prompt.BorderBrush = new SolidColorBrush(LineCol);
             _dock.Background = new SolidColorBrush(SolidBg);
             _dock.BorderBrush = new SolidColorBrush(LineCol);
-            _stats.Foreground = new SolidColorBrush(Text2);
             foreach (TextBox box in new[] { _search, _input, _chatSearch })
             {
                 box.Foreground = new SolidColorBrush(TextCol);
@@ -497,12 +614,10 @@ namespace Maela
         private readonly Grid _panelHost = new Grid();
         private readonly StackPanel _mapTools = new StackPanel();
         private readonly Border _prompt = new Border();
-        private readonly TextBlock _stats = new TextBlock();
         private readonly TextBox _input = new TextBox();
         private readonly StackPanel _messages = new StackPanel();
         private ScrollViewer _chatScroll;
         private readonly DispatcherTimer _timer = new DispatcherTimer(DispatcherPriority.Render);
-        private readonly DispatcherTimer _statsTimer = new DispatcherTimer(DispatcherPriority.Background);
         private readonly Stopwatch _clock = Stopwatch.StartNew();
 
         private bool _roomsTab = true;
@@ -524,26 +639,30 @@ namespace Maela
         private bool _onRefresh;
         private TimeSpan _lastRefreshTime;
 
+        private SpatialNode _hovered; // The room or channel the dots are wrapping.
         private bool _panning, _panMoved;
         private Point _panLast;
         private SpatialNode _pressed;
 
-        private int _frames;
-        private TimeSpan _lastCpu;
-        private double _lastCpuAt;
 
         public SpatialWindow(MainForm host)
         {
             _host = host;
             _themeId = Theme.Current.Id;
             UsePalette(_themeId);
+            _mark = ThemedMark(AccentCol);
             Title = "mæla";
-            try
+            if (_mark != null)
+                Icon = _mark; // Taskbar and title bar, in the theme's colour.
+            else
             {
-                using (System.Drawing.Icon appIcon = Branding.LoadAppIcon())
-                    base.Icon = Imaging.CreateBitmapSourceFromHIcon(appIcon.Handle, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+                try
+                {
+                    using (System.Drawing.Icon appIcon = Branding.LoadAppIcon())
+                        Icon = Imaging.CreateBitmapSourceFromHIcon(appIcon.Handle, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+                }
+                catch { /* The default icon is fine. */ }
             }
-            catch { /* The default icon is fine. */ }
             Width = 1280;
             Height = 800;
             MinWidth = 900;
@@ -555,6 +674,7 @@ namespace Maela
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
             BuildChrome();
+            _stars.SetColours(AccentCol, Accent2); // The saved theme's colours, not the default cyan.
 
             SourceInitialized += delegate
             {
@@ -579,7 +699,11 @@ namespace Maela
                 _host.SpatialCloseRequested();
             };
             PreviewMouseMove += PointerMoved;
-            MouseLeave += delegate { _stars.Pointer = new Point(-9999, -9999); };
+            MouseLeave += delegate
+            {
+                _stars.Pointer = new Point(-9999, -9999);
+                _hovered = null;
+            };
             PreviewKeyDown += KeyPressed;
             SizeChanged += delegate { _dirty = true; };
 
@@ -588,15 +712,9 @@ namespace Maela
             _timer.Interval = TimeSpan.FromMilliseconds(33);
             _timer.Tick += delegate { if (!_onRefresh) Frame(); };
             _timer.Start();
-            _lastCpu = Process.GetCurrentProcess().TotalProcessorTime;
-            _lastCpuAt = _clock.Elapsed.TotalSeconds;
-            _statsTimer.Interval = TimeSpan.FromSeconds(1);
-            _statsTimer.Tick += UpdateStats;
-            _statsTimer.Start();
             Closed += delegate
             {
                 _timer.Stop();
-                _statsTimer.Stop();
                 WantRefresh(false);
                 _host.SpatialOpenFriend(null);
             };
@@ -945,17 +1063,77 @@ namespace Maela
             {
                 _stars.DriftX = _tiltX;
                 _stars.DriftY = _tiltY;
+                SpatialNode target = _hovered;
+                bool onBall = false;
+                if (target != null && target.OnScreen)
+                {
+                    // Its clickable area includes the name, so check the pointer is on the ball itself.
+                    double px = _stars.Pointer.X - target.ScreenX, py = _stars.Pointer.Y - target.ScreenY;
+                    onBall = Math.Sqrt(px * px + py * py) <= target.WrapRadius * target.ScreenScale * BallSize(target, now) + 4;
+                }
+                _stars.Wrapping = onBall;
+                if (_stars.Wrapping)
+                {
+                    // It moves when the camera does, and grows, so follow it every frame.
+                    _stars.WrapTarget = new Point(target.ScreenX, target.ScreenY);
+                    _stars.WrapTargetRadius = target.WrapRadius * target.ScreenScale * BallSize(target, now);
+                }
                 _stars.Step(dt);
-                _frames++;
+
+                // The targeted ball grows as the point arrives, then breathes; others ease back.
+                foreach (SpatialNode node in _nodes)
+                {
+                    if (node.BallScale == null)
+                        continue;
+                    double want = onBall && node == target ? _stars.Arrived : 0;
+                    node.Grow += (want - node.Grow) * Math.Min(1, dt * 6);
+                    if (want == 0 && node.Grow < 0.002)
+                        node.Grow = 0;
+                    double size = BallSize(node, now);
+                    if (Math.Abs(node.BallScale.ScaleX - size) > 0.0005)
+                    {
+                        node.BallScale.ScaleX = size;
+                        node.BallScale.ScaleY = size;
+                    }
+                    if (node.Grow > 0)
+                        moving = true;
+                }
             }
             if (moving || _dirty)
             {
                 Project();
                 _dirty = false;
-                if (_flat)
-                    _frames++;
             }
-            WantRefresh(moving || (pointerActive && !_flat));
+            // While a ball is wrapped, keep the full frame rate so its effect stays smooth.
+            WantRefresh(moving || ((pointerActive || _stars.Wrapping) && !_flat));
+        }
+
+        /// <summary>About 8% bigger when fully grown, swelling a little more and back every three seconds.</summary>
+        private static double BallSize(SpatialNode node, double now)
+        {
+            return 1 + node.Grow * (0.08 + 0.025 * Math.Sin(now * 2 * Math.PI / 3));
+        }
+
+        /// <summary>
+        /// Moves everything drawn before the name into its own layer, scaled about the ball's centre,
+        /// so the ball can grow while its name stays put.
+        /// </summary>
+        private static ScaleTransform SplitBall(Grid box, UIElement name, double centreX, double centreY)
+        {
+            Grid ball = new Grid();
+            ball.Width = box.Width;
+            ball.Height = box.Height;
+            ball.IsHitTestVisible = false;
+            while (box.Children.Count > 0 && box.Children[0] != name)
+            {
+                UIElement part = box.Children[0];
+                box.Children.RemoveAt(0);
+                ball.Children.Add(part);
+            }
+            ScaleTransform scale = new ScaleTransform(1, 1, centreX, centreY);
+            ball.RenderTransform = scale;
+            box.Children.Insert(0, ball);
+            return scale;
         }
 
         private static bool Ease(ref double value, double target, double blend, double done)
@@ -1003,6 +1181,9 @@ namespace Maela
                 n.Scale.ScaleY = shown;
                 n.Move.X = sx - n.AnchorX;
                 n.Move.Y = sy - n.AnchorY;
+                n.ScreenX = sx;
+                n.ScreenY = sy;
+                n.ScreenScale = shown;
                 if (n.Link != null)
                 {
                     double rs = Perspective / (Perspective - (n.FromZ + _camZ));
@@ -1067,6 +1248,7 @@ namespace Maela
             _subLabels.Clear();
             _mainLabels.Clear();
             _sceneRings.Clear();
+            _hovered = null;
             _lastLod = -1;
             SpatialItem open = OpenRoomItem();
             if (open != null)
@@ -1223,7 +1405,13 @@ namespace Maela
             _subLabels.Add(sub);
 
             box.Cursor = Cursors.Hand;
+            ScaleTransform ballScale = isRoom ? SplitBall(box, name, 85, top + size / 2) : null;
             SpatialNode node = AddNode(box, 85, top + size / 2, item.X, item.Y, item.Z);
+            if (isRoom)
+            {
+                node.WrapRadius = size / 2;
+                node.BallScale = ballScale;
+            }
             node.Click = delegate
             {
                 if (isRoom)
@@ -1296,7 +1484,7 @@ namespace Maela
                 shape.HorizontalAlignment = HorizontalAlignment.Center;
                 shape.VerticalAlignment = VerticalAlignment.Top;
                 shape.Margin = new Thickness(0, 10, 0, 0);
-                shape.Child = channel.IsText ? CentredLabel("#", 30, color) : Icon("", 26, color);
+                shape.Child = channel.IsText ? CentredLabel("#", 30, color) : Glyph("", 26, color);
                 box.Children.Add(shape);
                 TextBlock name = Label(channel.Name, 15, TextCol, true);
                 name.HorizontalAlignment = HorizontalAlignment.Center;
@@ -1310,8 +1498,11 @@ namespace Maela
                 sub.Margin = new Thickness(0, 106, 0, 0);
                 box.Children.Add(sub);
                 box.Cursor = Cursors.Hand;
+                ScaleTransform ballScale = SplitBall(box, name, 85, 45);
 
                 SpatialNode node = AddNode(box, 85, 45, x, y, z);
+                node.WrapRadius = 35;
+                node.BallScale = ballScale;
                 node.Link = link;
                 // Its line starts at the room, whether or not it is flying out of it.
                 node.FromX = room.X;
@@ -1391,7 +1582,7 @@ namespace Maela
 
         private static TextBlock MuteMark()
         {
-            TextBlock mark = Icon("", 11, Bad);
+            TextBlock mark = Glyph("", 11, Bad);
             mark.Margin = new Thickness(4, 1, 0, 0);
             return mark;
         }
@@ -1430,6 +1621,7 @@ namespace Maela
             // WPF cannot blur what sits behind a panel, so the space itself is blurred while it holds still.
             _world.Effect = flat ? new BlurEffect { Radius = 8 } : null;
             _stars.Pointer = new Point(-9999, -9999);
+            _hovered = null;
             _stars.InvalidateVisual();
             _dirty = true;
         }
@@ -1548,6 +1740,8 @@ namespace Maela
             if (_flat)
                 return;
             _stars.Pointer = at;
+            SpatialNode over = NodeFrom(e.OriginalSource as DependencyObject);
+            _hovered = over != null && over.WrapRadius > 0 ? over : null;
             if (!_panning && ActualWidth > 0)
             {
                 _toTiltX = at.X / ActualWidth - 0.5;
@@ -1770,16 +1964,6 @@ namespace Maela
             _top.Margin = new Thickness(16, 12, 0, 0);
             _overlay.Children.Add(_top);
 
-            _stats.HorizontalAlignment = HorizontalAlignment.Right;
-            _stats.VerticalAlignment = VerticalAlignment.Top;
-            _stats.Margin = new Thickness(0, 14, 16, 0);
-            _stats.FontFamily = new FontFamily("Cascadia Mono, Consolas");
-            _stats.FontSize = 12;
-            _stats.Foreground = new SolidColorBrush(Text2);
-            _stats.IsHitTestVisible = false;
-            Panel.SetZIndex(_stats, 50);
-            _overlay.Children.Add(_stats);
-
             // The list of rooms or friends.
             _nav.Width = 254;
             _nav.HorizontalAlignment = HorizontalAlignment.Left;
@@ -1822,7 +2006,14 @@ namespace Maela
             zoom.Children.Add(Chip("−", delegate { ZoomBy(1 / 1.3, null); }));
             zoom.Children.Add(Chip("+", delegate { ZoomBy(1.3, null); }));
             zoom.Children.Add(Chip("Show all", ShowAll));
+            zoom.Children.Add(Chip("Map", delegate
+            {
+                // Hidden until asked for, so it doesn't sit over the space.
+                _map.Visibility = _map.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+                UpdateMap();
+            }));
             _mapTools.Children.Add(zoom);
+            _map.Visibility = Visibility.Collapsed;
             _map.Width = 178;
             _map.Height = 112;
             _map.Background = new SolidColorBrush(Fade(SolidBg, 0xE0));
@@ -1921,9 +2112,122 @@ namespace Maela
             _mapBuilt = true;
         }
 
+        // ----- Right-click menus, drawn here in the theme. -----
+
+        private readonly System.Windows.Controls.Primitives.Popup _menu = new System.Windows.Controls.Primitives.Popup();
+
+        public void ShowMenu(List<SpatialMenuEntry> entries)
+        {
+            _menu.IsOpen = false;
+            _menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+            _menu.StaysOpen = false; // A click anywhere else closes it.
+            _menu.AllowsTransparency = true;
+            Border frame = new Border();
+            frame.Background = new SolidColorBrush(SolidBg);
+            frame.BorderBrush = new SolidColorBrush(LineCol);
+            frame.BorderThickness = new Thickness(1);
+            frame.CornerRadius = new CornerRadius(10);
+            frame.Padding = new Thickness(5);
+            frame.MinWidth = 200;
+            frame.Focusable = true;
+            frame.KeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.Key == Key.Escape)
+                    _menu.IsOpen = false;
+            };
+            FillMenu(frame, entries, null);
+            _menu.Child = frame;
+            _menu.IsOpen = true;
+            frame.Focus();
+        }
+
+        /// <summary>A submenu replaces the list, with a way back, so nothing opens off screen.</summary>
+        private void FillMenu(Border frame, List<SpatialMenuEntry> entries, List<SpatialMenuEntry> parent)
+        {
+            StackPanel list = new StackPanel();
+            if (parent != null)
+                list.Children.Add(MenuRow("‹  Back", true, false, null, false, delegate { FillMenu(frame, parent, null); }));
+            int i;
+            for (i = 0; i < entries.Count; i++)
+            {
+                SpatialMenuEntry entry = entries[i];
+                if (entry.Separator)
+                {
+                    Border line = new Border();
+                    line.Height = 1;
+                    line.Margin = new Thickness(6, 4, 6, 4);
+                    line.Background = new SolidColorBrush(LineCol);
+                    list.Children.Add(line);
+                    continue;
+                }
+                if (!entry.Enabled && entry.Children == null && i == 0)
+                {
+                    // Classic menus open with their subject as a greyed-out heading.
+                    TextBlock heading = Label(entry.Text, 12, Muted, true);
+                    heading.Margin = new Thickness(9, 4, 9, 6);
+                    heading.TextTrimming = TextTrimming.CharacterEllipsis;
+                    list.Children.Add(heading);
+                    continue;
+                }
+                int id = entry.Id;
+                List<SpatialMenuEntry> children = entry.Children;
+                Action click = children != null
+                    ? (Action)delegate { FillMenu(frame, children, entries); }
+                    : delegate
+                    {
+                        _menu.IsOpen = false;
+                        _host.SpatialMenuClicked(id);
+                    };
+                list.Children.Add(MenuRow(entry.Text, entry.Enabled, entry.Checked, entry.Picture, children != null, click));
+            }
+            frame.Child = list;
+        }
+
+        private static FrameworkElement MenuRow(string text, bool enabled, bool ticked, ImageSource picture, bool more, Action click)
+        {
+            DockPanel line = new DockPanel();
+            TextBlock tick = Label(ticked ? "✓" : String.Empty, 13, AccentCol, true);
+            tick.Width = 18;
+            DockPanel.SetDock(tick, Dock.Left);
+            line.Children.Add(tick);
+            if (picture != null)
+            {
+                Image image = new Image();
+                image.Source = picture;
+                image.Width = 16;
+                image.Height = 16;
+                image.Margin = new Thickness(0, 0, 8, 0);
+                RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+                DockPanel.SetDock(image, Dock.Left);
+                line.Children.Add(image);
+            }
+            if (more)
+            {
+                TextBlock arrow = Label("›", 14, Muted, false);
+                arrow.Margin = new Thickness(12, 0, 0, 0);
+                DockPanel.SetDock(arrow, Dock.Right);
+                line.Children.Add(arrow);
+            }
+            line.Children.Add(Label(text, 13, enabled ? TextCol : Muted, false));
+            if (!enabled)
+            {
+                Border still = new Border();
+                still.Padding = new Thickness(6, 6, 10, 6);
+                still.Child = line;
+                return still;
+            }
+            Border row = Clickable(click);
+            row.Padding = new Thickness(6, 6, 10, 6);
+            row.CornerRadius = new CornerRadius(7);
+            row.MouseEnter += delegate { row.Background = new SolidColorBrush(Raise); };
+            row.MouseLeave += delegate { row.Background = Brushes.Transparent; };
+            row.Child = line;
+            return row;
+        }
+
         private void UpdateMap()
         {
-            if (!_mapBuilt || _mapTools.Visibility != Visibility.Visible)
+            if (!_mapBuilt || _mapTools.Visibility != Visibility.Visible || _map.Visibility != Visibility.Visible)
                 return;
             double s = ZoomOf(_camZ), vw = (_world.ActualWidth - _navShift) / s * _mapK, vh = _world.ActualHeight / s * _mapK;
             _mapView.Width = Math.Max(2, vw);
@@ -1952,6 +2256,17 @@ namespace Maela
         private void RefreshTop()
         {
             _top.Children.Clear();
+            if (_mark != null)
+            {
+                Image logo = new Image();
+                logo.Source = _mark;
+                logo.Width = 30;
+                logo.Height = 30;
+                logo.Margin = new Thickness(0, 0, 8, 0);
+                logo.VerticalAlignment = VerticalAlignment.Center;
+                RenderOptions.SetBitmapScalingMode(logo, BitmapScalingMode.HighQuality);
+                _top.Children.Add(logo);
+            }
             TextBlock brand = Label("mæla", 25, TextCol, true);
             brand.VerticalAlignment = VerticalAlignment.Center;
             brand.Margin = new Thickness(0, 0, 14, 0);
@@ -2288,7 +2603,7 @@ namespace Maela
             back.HorizontalAlignment = HorizontalAlignment.Left;
             back.VerticalAlignment = VerticalAlignment.Top;
             back.Margin = new Thickness(10);
-            back.Child = Icon("", 13, Colors.White);
+            back.Child = Glyph("", 13, Colors.White);
             banner.Children.Add(back);
             DockPanel.SetDock(banner, Dock.Top);
             rail.Children.Add(banner);
@@ -2334,7 +2649,7 @@ namespace Maela
                 {
                     int id = channel.Id;
                     bool mine = id == _state.LocalChannel;
-                    FrameworkElement lead = channel.IsText ? CentredLabel("#", 15, Text2) : Icon("", 14, mine ? Good : Text2);
+                    FrameworkElement lead = channel.IsText ? CentredLabel("#", 15, Text2) : Glyph("", 14, mine ? Good : Text2);
                     lead.Width = 26;
                     Border row = RailRow(lead, channel.Name, id == _openChannel, 0, delegate { OpenChannel(id); });
                     row.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs e)
@@ -2692,21 +3007,6 @@ namespace Maela
             _dock.Child = line;
         }
 
-        private void UpdateStats(object sender, EventArgs e)
-        {
-            double now = _clock.Elapsed.TotalSeconds;
-            Process process = Process.GetCurrentProcess();
-            TimeSpan cpu = process.TotalProcessorTime;
-            double span = Math.Max(0.1, now - _lastCpuAt);
-            double percent = (cpu - _lastCpu).TotalSeconds / span / Environment.ProcessorCount * 100;
-            _lastCpu = cpu;
-            _lastCpuAt = now;
-            int fps = (int)Math.Round(_frames / span);
-            _frames = 0;
-            int tier = RenderCapability.Tier >> 16;
-            _stats.Text = fps + " fps · CPU " + percent.ToString("0.0") + "% · " + (process.WorkingSet64 / (1024 * 1024)) + " MB · GPU tier " + tier;
-        }
-
         // ---- Small building blocks ----
 
         private static T TopLeft<T>(T element, double left, double top) where T : FrameworkElement
@@ -2739,7 +3039,7 @@ namespace Maela
             return label;
         }
 
-        private static TextBlock Icon(string glyph, double size, Color color)
+        private static TextBlock Glyph(string glyph, double size, Color color)
         {
             TextBlock icon = new TextBlock();
             icon.Text = glyph;
@@ -2861,7 +3161,7 @@ namespace Maela
             button.ToolTip = tip;
             if (on)
                 button.Background = new SolidColorBrush(soft ? Color.FromArgb(0x30, AccentCol.R, AccentCol.G, AccentCol.B) : Bad);
-            button.Child = Icon(glyph, 16, on ? (soft ? AccentCol : Colors.White) : Text2);
+            button.Child = Glyph(glyph, 16, on ? (soft ? AccentCol : Colors.White) : Text2);
             return button;
         }
 

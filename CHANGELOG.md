@@ -9,9 +9,17 @@
 - **Sort things into circles.** Drag rooms and friends between Favourites, the main circle and
   circles of your own. Drag a circle's name to move it, and right-click it to rename or delete it.
   Circles are kept on your PC only.
-- **Classic stays.** Settings > Appearance > Classic layout brings back the original window. You can
-  switch at any time without leaving your room or call.
-- Spatial follows your colour theme. Midnight gives it the neon look.
+- **The original window stays, now called Lightweight.** Settings opens with Themes: pick Spatial or
+  Lightweight from a preview of each, drawn in your colours, and choose Colours from the squares
+  below. You can switch at any time without leaving your room or call.
+- **Midnight is the new default colour**, now a neon cyan and navy in both layouts. If you already
+  chose one, you keep it. Your window, taskbar and tray icons take the colour too, and so do
+  shortcuts to mæla on your desktop, in the Start menu or pinned to the taskbar. mæla's own icon is
+  now the blue Midnight logo.
+- **Five new colours:** Synthwave, Forest, Ember, Ocean and Sakura, each with two accents, sorted
+  with similar colours together. Browse them in Settings with the arrows either side, or the
+  mouse wheel.
+- Right-click menus in Spatial are drawn in your theme, and the map is tucked behind a Map button.
 
 ## 0.12.0 - Live stream changes and room art
 

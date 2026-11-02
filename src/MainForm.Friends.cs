@@ -1234,9 +1234,17 @@ namespace Maela
 
         public void ShowPersonMenu(string id, Control anchor, Point at)
         {
+            ContextMenuStrip menu = BuildPersonMenu(id);
+            if (menu != null)
+                menu.Show(anchor, at);
+        }
+
+        /// <summary>Block and remove for one person, or null if they're gone. Spatial draws it itself.</summary>
+        public ContextMenuStrip BuildPersonMenu(string id)
+        {
             FriendInfo person = _friends.GetPeople().Find(delegate(FriendInfo p) { return p.Id == id; });
             if (person == null)
-                return;
+                return null;
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Renderer = new ThemedMenuRenderer();
             if (person.State != FriendState.Blocked)
@@ -1253,10 +1261,7 @@ namespace Maela
                 if (MessageBox.Show(this, question, "Remove", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     _friends.Remove(person.Id);
             });
-            if (anchor != null)
-                menu.Show(anchor, at);
-            else
-                menu.Show(at);
+            return menu;
         }
 
         private static int Rank(FriendInfo person)

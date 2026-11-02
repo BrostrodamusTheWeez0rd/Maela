@@ -26,6 +26,9 @@ namespace Maela
         public Color Accent;
         public Color Accent2;    // lighter accent for text/icons on dark
         public Color OnAccent = Color.White;
+        public Color Logo;       // The logo's colour: tray, taskbar and Spatial's top bar.
+        public Color Second;     // Spatial's second accent: lines between dots, voice channels.
+        public Color Warm = Color.FromArgb(255, 176, 87); // Spatial's chat-only channels.
         public Color Good = Color.FromArgb(62, 207, 142);
         public Color Danger = Color.FromArgb(242, 63, 67);
 
@@ -38,15 +41,16 @@ namespace Maela
             Id = "maela-red", Name = "Maela Red", Dark = true,
             Rail = Rgb(0x100D0F), Side = Rgb(0x171316), Main = Rgb(0x1C181B), Surface = Rgb(0x262024), Surface2 = Rgb(0x2F282C),
             Line = Rgb(0x2E272B), Text = Rgb(0xF6EFF1), Text2 = Rgb(0xCFC4C8), Muted = Rgb(0x94888D),
-            Accent = Rgb(0xE5484D), Accent2 = Rgb(0xFF6B70)
+            Accent = Rgb(0xE5484D), Accent2 = Rgb(0xFF6B70), Logo = Rgb(0xFF5A60), Second = Rgb(0xFF9D6B)
         };
 
         public static readonly Theme Midnight = new Theme
         {
             Id = "midnight", Name = "Midnight", Dark = true,
-            Rail = Rgb(0x0A0D13), Side = Rgb(0x10141C), Main = Rgb(0x141924), Surface = Rgb(0x1C2230), Surface2 = Rgb(0x242B3B),
-            Line = Rgb(0x212838), Text = Rgb(0xEEF1F8), Text2 = Rgb(0xC3CAD9), Muted = Rgb(0x8590A6),
-            Accent = Rgb(0x6D7CFF), Accent2 = Rgb(0x93A0FF)
+            // The neon look, the same as Spatial's. Cyan is too light for white text, hence OnAccent.
+            Rail = Rgb(0x07090F), Side = Rgb(0x0D1020), Main = Rgb(0x111528), Surface = Rgb(0x171B2E), Surface2 = Rgb(0x21263D),
+            Line = Rgb(0x232842), Text = Rgb(0xEEF1FA), Text2 = Rgb(0xBCC3D8), Muted = Rgb(0x8089A3),
+            Accent = Rgb(0x00E5F5), Accent2 = Rgb(0x6FF3FB), OnAccent = Rgb(0x031014), Logo = Rgb(0x00E5F5), Second = Rgb(0xB35CFF), Warm = Rgb(0xFF7A2F)
         };
 
         public static readonly Theme Daylight = new Theme
@@ -54,7 +58,7 @@ namespace Maela
             Id = "daylight", Name = "Daylight", Dark = false,
             Rail = Rgb(0xEBE5E7), Side = Rgb(0xF5F1F2), Main = Rgb(0xFFFFFF), Surface = Rgb(0xF2EDEF), Surface2 = Rgb(0xE6DFE2),
             Line = Rgb(0xE6DFE2), Text = Rgb(0x1D1719), Text2 = Rgb(0x3D3337), Muted = Rgb(0x7C7074),
-            Accent = Rgb(0xD93B47), Accent2 = Rgb(0xD93B47), Good = Rgb(0x1F9D63)
+            Accent = Rgb(0xD93B47), Accent2 = Rgb(0xD93B47), Good = Rgb(0x1F9D63), Logo = Rgb(0xD93B47), Second = Rgb(0x7C6CFF), Warm = Rgb(0xF28037)
         };
 
         public static readonly Theme OledBlack = new Theme
@@ -62,12 +66,52 @@ namespace Maela
             Id = "oled", Name = "OLED Black", Dark = true,
             Rail = Rgb(0x000000), Side = Rgb(0x000000), Main = Rgb(0x000000), Surface = Rgb(0x121112), Surface2 = Rgb(0x1C1A1B),
             Line = Rgb(0x1E1C1D), Text = Rgb(0xF6EFF1), Text2 = Rgb(0xC9BFC3), Muted = Rgb(0x8E8387),
-            Accent = Rgb(0xE5484D), Accent2 = Rgb(0xFF6B70)
+            Accent = Rgb(0xE5484D), Accent2 = Rgb(0xFF6B70), Logo = Rgb(0xFF5A60), Second = Rgb(0xFF9D6B)
         };
 
-        public static readonly Theme[] All = { MaelaRed, Midnight, Daylight, OledBlack };
+        public static readonly Theme Synthwave = new Theme
+        {
+            Id = "synthwave", Name = "Synthwave", Dark = true,
+            Rail = Rgb(0x0C0614), Side = Rgb(0x140B22), Main = Rgb(0x190E2A), Surface = Rgb(0x231537), Surface2 = Rgb(0x2D1C45),
+            Line = Rgb(0x2C1D42), Text = Rgb(0xF7EEFF), Text2 = Rgb(0xD2C2E6), Muted = Rgb(0x9A88B3),
+            Accent = Rgb(0xFF3DCB), Accent2 = Rgb(0xFF7ADB), OnAccent = Rgb(0x1A0414), Logo = Rgb(0xFF3DCB), Second = Rgb(0x3DE8FF), Warm = Rgb(0xFFB13D)
+        };
 
-        private static Theme _current = MaelaRed;
+        public static readonly Theme Forest = new Theme
+        {
+            Id = "forest", Name = "Forest", Dark = true,
+            Rail = Rgb(0x060D09), Side = Rgb(0x0B1610), Main = Rgb(0x0F1C15), Surface = Rgb(0x16271D), Surface2 = Rgb(0x1E3326),
+            Line = Rgb(0x1E3227), Text = Rgb(0xEEF7F1), Text2 = Rgb(0xC1D6C8), Muted = Rgb(0x86A08F),
+            Accent = Rgb(0x3DDC84), Accent2 = Rgb(0x7AEAAA), OnAccent = Rgb(0x03140A), Logo = Rgb(0x3DDC84), Second = Rgb(0x2EC4B6), Warm = Rgb(0xE8C547)
+        };
+
+        public static readonly Theme Ember = new Theme
+        {
+            Id = "ember", Name = "Ember", Dark = true,
+            Rail = Rgb(0x0E0806), Side = Rgb(0x18100B), Main = Rgb(0x1E140E), Surface = Rgb(0x2A1C14), Surface2 = Rgb(0x35241A),
+            Line = Rgb(0x33241A), Text = Rgb(0xFBF1EA), Text2 = Rgb(0xDCC8BA), Muted = Rgb(0xA08876),
+            Accent = Rgb(0xFF8A3D), Accent2 = Rgb(0xFFB27A), OnAccent = Rgb(0x1A0A02), Logo = Rgb(0xFF8A3D), Second = Rgb(0xFFC94D), Warm = Rgb(0xFF5A60)
+        };
+
+        public static readonly Theme Ocean = new Theme
+        {
+            Id = "ocean", Name = "Ocean", Dark = true,
+            Rail = Rgb(0x050A12), Side = Rgb(0x0A1220), Main = Rgb(0x0D1728), Surface = Rgb(0x142136), Surface2 = Rgb(0x1B2B44),
+            Line = Rgb(0x1B2A42), Text = Rgb(0xEDF4FD), Text2 = Rgb(0xBFD0E6), Muted = Rgb(0x8297B3),
+            Accent = Rgb(0x3DA5FF), Accent2 = Rgb(0x7BC2FF), OnAccent = Rgb(0x02101F), Logo = Rgb(0x3DA5FF), Second = Rgb(0x2EE6C9), Warm = Rgb(0xFFB13D)
+        };
+
+        public static readonly Theme Sakura = new Theme
+        {
+            Id = "sakura", Name = "Sakura", Dark = true,
+            Rail = Rgb(0x110A0E), Side = Rgb(0x1A1016), Main = Rgb(0x20141B), Surface = Rgb(0x2C1C26), Surface2 = Rgb(0x372431),
+            Line = Rgb(0x352330), Text = Rgb(0xFBEFF5), Text2 = Rgb(0xDEC6D2), Muted = Rgb(0xA3899A),
+            Accent = Rgb(0xFF7EB6), Accent2 = Rgb(0xFFA8CE), OnAccent = Rgb(0x1F0612), Logo = Rgb(0xFF7EB6), Second = Rgb(0xB79CFF), Warm = Rgb(0xFFC27A)
+        };
+
+        public static readonly Theme[] All = { Midnight, Ocean, Synthwave, Sakura, MaelaRed, OledBlack, Ember, Forest, Daylight }; // Round the colour wheel, so similar ones sit together.
+
+        private static Theme _current = Midnight;
 
         public static Theme Current { get { return _current; } }
 
@@ -82,7 +126,7 @@ namespace Maela
                 if (String.Equals(All[i].Id, id, StringComparison.OrdinalIgnoreCase))
                     return All[i];
             }
-            return MaelaRed;
+            return Midnight;
         }
 
         public static void Apply(Theme theme)

@@ -201,18 +201,18 @@ namespace Maela
         }
     }
 
-    /// <summary>A clickable preview of a theme.</summary>
-    internal sealed class ThemeCard : Control
+    /// <summary>A clickable preview of a layout (Spatial or Classic), drawn in the current colours.</summary>
+    internal sealed class LayoutCard : Control
     {
-        public readonly Theme Theme;
+        public readonly bool Classic;
         private bool _hover;
 
-        public ThemeCard(Theme theme)
+        public LayoutCard(bool classic)
         {
-            Theme = theme;
+            Classic = classic;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             Cursor = Cursors.Hand;
-            Size = new Size(138, 112);
+            Size = new Size(300, 156);
         }
 
         public bool Selected { get; set; }
@@ -222,30 +222,278 @@ namespace Maela
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Theme cur = Maela.Theme.Current;
+            Theme t = Theme.Current;
             Graphics g = e.Graphics;
-            g.Clear(Parent != null ? Parent.BackColor : cur.Main);
-            Rectangle preview = new Rectangle(2, 2, Width - 4, 76);
+            g.Clear(Parent != null ? Parent.BackColor : t.Main);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle preview = new Rectangle(2, 2, Width - 4, 120);
             using (GraphicsPath clip = Ui.RoundRect(preview, 10))
             {
                 g.SetClip(clip);
-                using (SolidBrush b = new SolidBrush(Theme.Main)) g.FillRectangle(b, preview);
-                using (SolidBrush b = new SolidBrush(Theme.Rail)) g.FillRectangle(b, preview.X, preview.Y, 18, preview.Height);
-                using (SolidBrush b = new SolidBrush(Theme.Side)) g.FillRectangle(b, preview.X + 18, preview.Y, 36, preview.Height);
-                Ui.FillRound(g, Theme.Accent, new RectangleF(preview.X + 4, preview.Y + 8, 10, 10), 3);
-                Ui.FillRound(g, Ui.Mix(Theme.Side, Theme.Accent, 0.25f), new RectangleF(preview.X + 22, preview.Y + 10, 28, 7), 3);
-                Ui.FillRound(g, Theme.Surface2, new RectangleF(preview.X + 22, preview.Y + 22, 22, 5), 2);
-                Ui.FillRound(g, Theme.Surface2, new RectangleF(preview.X + 22, preview.Y + 31, 26, 5), 2);
-                Ui.FillRound(g, Theme.Text2, new RectangleF(preview.X + 62, preview.Y + 14, 40, 5), 2);
-                Ui.FillRound(g, Theme.Muted, new RectangleF(preview.X + 62, preview.Y + 24, 56, 4), 2);
-                Ui.FillRound(g, Theme.Muted, new RectangleF(preview.X + 62, preview.Y + 32, 48, 4), 2);
-                Ui.FillRound(g, Theme.Surface, new RectangleF(preview.X + 60, preview.Bottom - 20, preview.Width - 66, 13), 5);
-                Ui.FillRound(g, Theme.Accent, new RectangleF(preview.Right - 18, preview.Bottom - 18, 10, 9), 3);
+                if (Classic)
+                    PaintClassic(g, t, preview);
+                else
+                    PaintSpatial(g, t, preview);
                 g.ResetClip();
             }
+            Color border = Selected ? t.Accent : (_hover ? t.Text2 : t.Line);
+            Ui.StrokeRound(g, border, new RectangleF(1, 1, Width - 3, 121), 10, Selected ? 2.5f : 1.2f);
+            Ui.DrawText(g, Classic ? "Lightweight" : "Spatial", Selected ? Ui.BodyBold : Ui.Body, new Rectangle(0, 130, Width, 22), Selected ? t.Text : t.Text2, TextFormatFlags.HorizontalCenter);
+        }
+
+        /// <summary>Room rail, channel list and chat.</summary>
+        private static void PaintClassic(Graphics g, Theme t, Rectangle r)
+        {
+            using (SolidBrush b = new SolidBrush(t.Main)) g.FillRectangle(b, r);
+            using (SolidBrush b = new SolidBrush(t.Rail)) g.FillRectangle(b, r.X, r.Y, 30, r.Height);
+            using (SolidBrush b = new SolidBrush(t.Side)) g.FillRectangle(b, r.X + 30, r.Y, 74, r.Height);
+            int i;
+            for (i = 0; i < 3; i++)
+                Ui.FillRound(g, i == 0 ? t.Accent : t.Surface2, new RectangleF(r.X + 7, r.Y + 10 + i * 22, 16, 16), 5);
+            Ui.FillRound(g, Ui.Mix(t.Side, t.Accent, 0.3f), new RectangleF(r.X + 36, r.Y + 12, 60, 8), 3);
+            for (i = 0; i < 4; i++)
+                Ui.FillRound(g, t.Surface2, new RectangleF(r.X + 38, r.Y + 30 + i * 13, 40 + (i % 2) * 14, 6), 3);
+            for (i = 0; i < 3; i++)
+            {
+                using (SolidBrush b = new SolidBrush(Ui.ColorForName(i == 0 ? "a" : i == 1 ? "kael" : "neon")))
+                    g.FillEllipse(b, r.X + 112, r.Y + 14 + i * 26, 12, 12);
+                Ui.FillRound(g, t.Text2, new RectangleF(r.X + 130, r.Y + 15 + i * 26, 50, 4), 2);
+                Ui.FillRound(g, t.Muted, new RectangleF(r.X + 130, r.Y + 23 + i * 26, 90 + (i % 2) * 30, 4), 2);
+            }
+            Ui.FillRound(g, t.Surface, new RectangleF(r.X + 110, r.Bottom - 22, r.Width - 118, 14), 5);
+            Ui.FillRound(g, t.Accent, new RectangleF(r.Right - 22, r.Bottom - 20, 12, 10), 3);
+        }
+
+        /// <summary>Rooms floating in a circle, with the list on the left and the dock along the bottom.</summary>
+        private static void PaintSpatial(Graphics g, Theme t, Rectangle r)
+        {
+            Color space = Ui.Mix(t.Rail, Color.Black, 0.35f);
+            using (SolidBrush b = new SolidBrush(space)) g.FillRectangle(b, r);
+            int i;
+            System.Random dots = new System.Random(4);
+            using (SolidBrush b = new SolidBrush(Ui.Mix(space, t.Accent, 0.5f)))
+                for (i = 0; i < 26; i++)
+                    g.FillEllipse(b, r.X + dots.Next(r.Width), r.Y + dots.Next(r.Height - 18), 2, 2);
+
+            // The list panel, and the tabs above it.
+            Ui.FillRound(g, t.Accent, new RectangleF(r.X + 8, r.Y + 7, 26, 8), 3);
+            Ui.FillRound(g, t.Surface, new RectangleF(r.X + 37, r.Y + 7, 22, 8), 3);
+            Ui.FillRound(g, Ui.Mix(space, t.Side, 0.8f), new RectangleF(r.X + 8, r.Y + 20, 52, r.Height - 44), 5);
+            for (i = 0; i < 4; i++)
+                Ui.FillRound(g, t.Surface2, new RectangleF(r.X + 13, r.Y + 27 + i * 12, 34 + (i % 2) * 8, 5), 2);
+
+            // A circle of rooms, one of them the room you're in.
+            RectangleF circle = new RectangleF(r.X + 112, r.Y + 10, 120, 82);
+            using (Pen ring = new Pen(Color.FromArgb(110, t.Text2), 1f))
+            {
+                ring.DashStyle = DashStyle.Dash;
+                g.DrawEllipse(ring, circle);
+            }
+            PointF[] orbs = { new PointF(150, 40), new PointF(192, 30), new PointF(176, 66), new PointF(212, 58) };
+            for (i = 0; i < orbs.Length; i++)
+            {
+                float x = r.X + orbs[i].X, y = r.Y + orbs[i].Y, size = i == 0 ? 20 : 15;
+                Color colour = i == 0 ? t.Accent : Ui.ColorForName("room" + i);
+                using (SolidBrush glow = new SolidBrush(Color.FromArgb(60, colour)))
+                    g.FillEllipse(glow, x - size / 2 - 4, y - size / 2 - 4, size + 8, size + 8);
+                using (SolidBrush b = new SolidBrush(colour))
+                    g.FillEllipse(b, x - size / 2, y - size / 2, size, size);
+                if (i == 0)
+                    using (Pen here = new Pen(t.Good, 1.2f))
+                        g.DrawEllipse(here, x - size / 2 - 3, y - size / 2 - 3, size + 6, size + 6);
+            }
+
+            // The dock, with your controls and the call.
+            using (SolidBrush b = new SolidBrush(t.Side)) g.FillRectangle(b, r.X, r.Bottom - 18, r.Width, 18);
+            using (SolidBrush b = new SolidBrush(Ui.ColorForName("you")))
+                g.FillEllipse(b, r.X + 8, r.Bottom - 15, 12, 12);
+            Ui.FillRound(g, t.Good, new RectangleF(r.X + r.Width / 2 - 20, r.Bottom - 12, 40, 5), 2);
+            Ui.FillRound(g, t.Danger, new RectangleF(r.X + r.Width / 2 + 26, r.Bottom - 14, 10, 10), 3);
+        }
+    }
+
+    /// <summary>A small square showing one colour setting: its background and both accents, named underneath.</summary>
+    internal sealed class ColourSwatch : Control
+    {
+        public readonly Theme Colours;
+        private bool _hover;
+
+        public ColourSwatch(Theme colours)
+        {
+            Colours = colours;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Hand;
+            Size = new Size(84, 112);
+        }
+
+        public bool Selected { get; set; }
+
+        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Theme cur = Theme.Current;
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : cur.Main);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            RectangleF square = new RectangleF(2, 2, Width - 4, Width - 4);
+            Ui.FillRound(g, Colours.Rail, square, 10);
+            // The two accents, overlapping, as they meet in the space.
+            float big = square.Width * 0.46f, small = square.Width * 0.34f;
+            using (SolidBrush b = new SolidBrush(Colours.Second))
+                g.FillEllipse(b, square.Right - small - 12, square.Bottom - small - 12, small, small);
+            using (SolidBrush b = new SolidBrush(Colours.Logo))
+                g.FillEllipse(b, square.X + 12, square.Y + 12, big, big);
             Color border = Selected ? cur.Accent : (_hover ? cur.Text2 : cur.Line);
-            Ui.StrokeRound(g, border, new RectangleF(1, 1, Width - 3, 77), 10, Selected ? 2.5f : 1.2f);
-            Ui.DrawText(g, Theme.Name, Selected ? Ui.SmallBold : Ui.Small, new Rectangle(0, 84, Width, 20), Selected ? cur.Text : cur.Text2, TextFormatFlags.HorizontalCenter);
+            Ui.StrokeRound(g, border, new RectangleF(1, 1, Width - 3, Width - 3), 10, Selected ? 2.5f : 1.2f);
+            Ui.DrawText(g, Colours.Name, Selected ? Ui.SmallBold : Ui.Small, new Rectangle(0, Width + 4, Width, 18), Selected ? cur.Text : cur.Text2, TextFormatFlags.HorizontalCenter);
+        }
+    }
+
+    /// <summary>A small triangle that pages a strip one way or the other.</summary>
+    internal sealed class ArrowButton : Control
+    {
+        private readonly bool _forward;
+        private bool _hover;
+
+        public ArrowButton(bool forward)
+        {
+            _forward = forward;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Hand;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Theme t = Theme.Current;
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : t.Main);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float cx = Width / 2f, cy = Height / 2f, half = 7;
+            PointF[] triangle = _forward
+                ? new[] { new PointF(cx - half * 0.6f, cy - half), new PointF(cx + half * 0.8f, cy), new PointF(cx - half * 0.6f, cy + half) }
+                : new[] { new PointF(cx + half * 0.6f, cy - half), new PointF(cx - half * 0.8f, cy), new PointF(cx + half * 0.6f, cy + half) };
+            Color colour = !Enabled ? Ui.Mix(t.Main, t.Muted, 0.35f) : (_hover ? t.Accent : t.Text2);
+            using (SolidBrush b = new SolidBrush(colour))
+                g.FillPolygon(b, triangle);
+        }
+    }
+
+    /// <summary>
+    /// Every colour option as a square, more than fit on one line: the triangles at each end, or
+    /// the mouse wheel over the strip, browse through them.
+    /// </summary>
+    internal sealed class ColourStrip : Control
+    {
+        private const int ArrowWidth = 24;
+        private const int Gap = 12;
+        private readonly System.Collections.Generic.List<ColourSwatch> _swatches = new System.Collections.Generic.List<ColourSwatch>();
+        private readonly ArrowButton _back = new ArrowButton(false);
+        private readonly ArrowButton _next = new ArrowButton(true);
+        private int _first;
+        private int _selected;
+        private bool _shownSelected;
+
+        public event Action<Theme> Picked;
+
+        public ColourStrip(string selectedId, int width)
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            int i;
+            for (i = 0; i < Theme.All.Length; i++)
+            {
+                ColourSwatch swatch = new ColourSwatch(Theme.All[i]);
+                swatch.Selected = Theme.All[i].Id == selectedId;
+                if (swatch.Selected)
+                    _selected = i;
+                swatch.Click += SwatchClicked;
+                swatch.MouseWheel += Wheel;
+                _swatches.Add(swatch);
+                Controls.Add(swatch);
+            }
+            _back.Click += delegate { Browse(-1); };
+            _next.Click += delegate { Browse(1); };
+            _back.MouseWheel += Wheel;
+            _next.MouseWheel += Wheel;
+            Controls.Add(_back);
+            Controls.Add(_next);
+            MouseWheel += Wheel;
+            Size = new Size(width, _swatches[0].Height);
+        }
+
+        private int PerView
+        {
+            get
+            {
+                int room = Width - 2 * ArrowWidth - 2 * Gap + Gap;
+                return Math.Max(1, room / (_swatches[0].Width + Gap));
+            }
+        }
+
+        private void Wheel(object sender, MouseEventArgs e)
+        {
+            Browse(e.Delta > 0 ? -1 : 1);
+        }
+
+        private void Browse(int by)
+        {
+            _first += by;
+            PerformLayout();
+        }
+
+        private void SwatchClicked(object sender, EventArgs e)
+        {
+            int i;
+            for (i = 0; i < _swatches.Count; i++)
+            {
+                _swatches[i].Selected = Object.ReferenceEquals(_swatches[i], sender);
+                if (_swatches[i].Selected)
+                    _selected = i;
+                _swatches[i].Invalidate();
+            }
+            Action<Theme> picked = Picked;
+            if (picked != null)
+                picked(((ColourSwatch)sender).Colours);
+        }
+
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            base.OnLayout(e);
+            if (_swatches.Count == 0)
+                return;
+            int perView = PerView, square = _swatches[0].Width;
+            if (!_shownSelected && Width > 0)
+            {
+                // Open with the chosen colour in view.
+                _shownSelected = true;
+                if (_selected >= perView)
+                    _first = _selected - perView + 1;
+            }
+            _first = Math.Max(0, Math.Min(_first, _swatches.Count - perView));
+            int used = perView * square + (perView - 1) * Gap;
+            int left = ArrowWidth + Gap + Math.Max(0, (Width - 2 * ArrowWidth - 2 * Gap - used) / 2);
+            int i;
+            for (i = 0; i < _swatches.Count; i++)
+            {
+                bool shown = i >= _first && i < _first + perView;
+                _swatches[i].Visible = shown;
+                if (shown)
+                    _swatches[i].Location = new Point(left + (i - _first) * (square + Gap), 0);
+            }
+            _back.SetBounds(0, 0, ArrowWidth, square);
+            _next.SetBounds(Width - ArrowWidth, 0, ArrowWidth, square);
+            _back.Enabled = _first > 0;
+            _next.Enabled = _first + perView < _swatches.Count;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Parent != null ? Parent.BackColor : Theme.Current.Main);
         }
     }
 
@@ -389,7 +637,8 @@ namespace Maela
         private readonly TrackBar _master = new TrackBar();
         private readonly ToggleSwitch _echo;
         private readonly ToggleSwitch _noise;
-        private readonly ToggleSwitch _classic;
+        private readonly LayoutCard _spatialCard = new LayoutCard(false);
+        private readonly LayoutCard _classicCard = new LayoutCard(true);
         private readonly ToggleSwitch _sounds;
         private readonly ToggleSwitch _agc;
         private readonly ToggleSwitch _autoUpdate;
@@ -398,7 +647,6 @@ namespace Maela
         private readonly ComboBox _streamDecode = new ComboBox();
         private readonly Label _downloadStatus = new Label();
         private readonly FlatButton _repair = new FlatButton();
-        private readonly System.Collections.Generic.List<ThemeCard> _themeCards = new System.Collections.Generic.List<ThemeCard>();
         private readonly VoipEngine _engine;
         private readonly string _originalTheme;
         private AppPreferences _preferences;
@@ -421,20 +669,24 @@ namespace Maela
             AddSection("Profile");
             _name = AddField("Display name", _preferences.DisplayName, false);
 
-            AddSection("Appearance");
-            int x = Margin_X;
-            foreach (Theme option in Theme.All)
-            {
-                ThemeCard card = new ThemeCard(option);
-                card.Location = new Point(x, Cursor_Y);
-                card.Selected = option.Id == _preferences.Theme;
-                card.Click += ThemeCardClicked;
-                Controls.Add(card);
-                _themeCards.Add(card);
-                x += card.Width + 12;
-            }
-            Cursor_Y += 122;
-            _classic = AddToggle("Classic layout", "Use the original mæla window instead of the Spatial one.", _preferences.ClassicLayout);
+            // Themes are the layouts; Colours go on either one.
+            AddSection("Themes");
+            _spatialCard.Location = new Point(Margin_X, Cursor_Y);
+            _classicCard.Location = new Point(Margin_X + 316, Cursor_Y);
+            _spatialCard.Selected = !_preferences.ClassicLayout;
+            _classicCard.Selected = _preferences.ClassicLayout;
+            _spatialCard.Click += LayoutCardClicked;
+            _classicCard.Click += LayoutCardClicked;
+            Controls.Add(_spatialCard);
+            Controls.Add(_classicCard);
+            Cursor_Y += _spatialCard.Height + 8;
+            AddFieldLabel("Colours", Margin_X, Cursor_Y);
+            Cursor_Y += 22;
+            ColourStrip colours = new ColourStrip(_preferences.Theme, ClientSize.Width - Margin_X * 2);
+            colours.Location = new Point(Margin_X, Cursor_Y);
+            colours.Picked += ColoursPicked;
+            Controls.Add(colours);
+            Cursor_Y += colours.Height + 12;
 
             AddSection("Voice & audio");
             AddFieldLabel("Input device", Margin_X, Cursor_Y);
@@ -567,16 +819,21 @@ namespace Maela
             };
         }
 
-        private void ThemeCardClicked(object sender, EventArgs e)
+        private void LayoutCardClicked(object sender, EventArgs e)
         {
-            ThemeCard picked = (ThemeCard)sender;
-            foreach (ThemeCard card in _themeCards)
-            {
-                card.Selected = Object.ReferenceEquals(card, picked);
-                card.Invalidate();
-            }
-            _preferences.Theme = picked.Theme.Id;
-            Theme.Apply(picked.Theme); // Live preview in the main window.
+            _preferences.ClassicLayout = Object.ReferenceEquals(sender, _classicCard);
+            _spatialCard.Selected = !_preferences.ClassicLayout;
+            _classicCard.Selected = _preferences.ClassicLayout;
+            _spatialCard.Invalidate();
+            _classicCard.Invalidate();
+        }
+
+        private void ColoursPicked(Theme picked)
+        {
+            _preferences.Theme = picked.Id;
+            Theme.Apply(picked); // Live preview in the app, and in both cards.
+            _spatialCard.Invalidate();
+            _classicCard.Invalidate();
         }
 
         private void UpdateDownloadStatus(string message)
@@ -630,7 +887,6 @@ namespace Maela
             _preferences.MicVolumePercent = _mic.Value;
             _preferences.MasterVolumePercent = _master.Value;
             _preferences.EchoCancellation = _echo.Checked;
-            _preferences.ClassicLayout = _classic.Checked;
             _preferences.NoiseSuppression = _noise.Checked;
             _preferences.SoundEffects = _sounds.Checked;
             _preferences.AutoGain = _agc.Checked;
@@ -799,7 +1055,6 @@ namespace Maela
     internal sealed class SetupDialog : ThemedDialog
     {
         private readonly RoundField _name;
-        private readonly System.Collections.Generic.List<ThemeCard> _cards = new System.Collections.Generic.List<ThemeCard>();
         private readonly Label _status;
         private readonly ProgressStrip _progress = new ProgressStrip();
         private readonly FlatButton _start;
@@ -830,22 +1085,14 @@ namespace Maela
             _name = AddField("What should friends call you?", preferences.DisplayName, false);
 
             AddSection("Pick a look (you can change it later)");
-            int x = Margin_X;
-            foreach (Theme option in Theme.All)
+            ColourStrip colours = new ColourStrip(preferences.Theme, ClientSize.Width - Margin_X * 2);
+            colours.Location = new Point(Margin_X, Cursor_Y);
+            colours.Picked += delegate(Theme picked)
             {
-                ThemeCard card = new ThemeCard(option);
-                card.Location = new Point(x, Cursor_Y);
-                card.Selected = option.Id == preferences.Theme;
-                card.Click += delegate(object s, EventArgs e)
-                {
-                    foreach (ThemeCard c in _cards) { c.Selected = Object.ReferenceEquals(c, s); }
-                    Theme.Apply(((ThemeCard)s).Theme);
-                    RepaintForTheme();
-                };
-                Controls.Add(card);
-                _cards.Add(card);
-                x += card.Width + 12;
-            }
+                Theme.Apply(picked);
+                RepaintForTheme();
+            };
+            Controls.Add(colours);
             Cursor_Y += 122;
 
             AddSection("What mæla uses");

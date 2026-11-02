@@ -74,10 +74,15 @@ namespace Maela
                 Application.ThreadException += delegate(object s, System.Threading.ThreadExceptionEventArgs e)
                 {
                     EmergencyLeave();
+                    LogCrash(e.Exception);
                     MessageBox.Show("m\u00E6la ran into a problem and needs to close.\n\n" + e.Exception.Message, "m\u00E6la", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     Environment.Exit(1);
                 };
-                AppDomain.CurrentDomain.UnhandledException += delegate { EmergencyLeave(); };
+                AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
+                {
+                    EmergencyLeave();
+                    LogCrash(e.ExceptionObject as Exception);
+                };
 
                 Updater.CleanupAfterUpdate();
                 Application.Run(new MainForm(justUpdated));
@@ -86,6 +91,33 @@ namespace Maela
 
         /// <summary>Set by the main window: leaves the room without touching the UI.</summary>
         internal static Action LeaveRoomOnCrash;
+
+        /// <summary>
+        /// Keeps where a crash happened in crash.log next to the settings, so it can be fixed. It
+        /// holds only the error and the code it went through: no chat, names or addresses.
+        /// The newest crash goes first and the file stays small.
+        /// </summary>
+        internal static void LogCrash(Exception error)
+        {
+            if (error == null)
+                return;
+            try
+            {
+                string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Maela");
+                Directory.CreateDirectory(folder);
+                string path = Path.Combine(folder, "crash.log");
+                string entry = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  mæla " + Updater.CurrentVersionText + Environment.NewLine + error + Environment.NewLine + Environment.NewLine;
+                string old = File.Exists(path) ? File.ReadAllText(path) : String.Empty;
+                string text = entry + old;
+                if (text.Length > 64 * 1024)
+                    text = text.Substring(0, 64 * 1024);
+                File.WriteAllText(path, text);
+            }
+            catch
+            {
+                // Logging must never cause a second problem.
+            }
+        }
 
         private static void EmergencyLeave()
         {
@@ -280,6 +312,265 @@ namespace Maela
             }
             catch { }
             return null;
+        }
+
+        private static Bitmap _markMaster;
+        private static readonly object MarkLock = new object(); // GDI+ images can't be drawn from two threads at once.
+
+        /// <summary>The logo at one size in the colour, or null if it can't be loaded.</summary>
+        private static Bitmap ThemedBitmap(Color colour, int size)
+        {
+            Bitmap bitmap = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            lock (MarkLock)
+            {
+                if (_markMaster == null)
+                    _markMaster = LoadBrandMark() as Bitmap;
+                if (_markMaster == null)
+                {
+                    bitmap.Dispose();
+                    return null;
+                }
+                using (Graphics g = Graphics.FromImage(bitmap))
+                {
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.DrawImage(_markMaster, new Rectangle(0, 0, size, size));
+                }
+            }
+            Rectangle all = new Rectangle(0, 0, size, size);
+            System.Drawing.Imaging.BitmapData data = bitmap.LockBits(all, System.Drawing.Imaging.ImageLockMode.ReadWrite, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            byte[] pixels = new byte[data.Stride * size];
+            Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+            Recolour(pixels, colour);
+            Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+            bitmap.UnlockBits(data);
+            return bitmap;
+        }
+
+        /// <summary>
+        /// The logo as an icon in the theme's colour, for the tray, taskbar and title bar. The
+        /// exe's own icon is fixed when it's built; shortcuts follow through ThemedIconFile.
+        /// </summary>
+        public static Icon ThemedIcon(Color colour, int size)
+        {
+            try
+            {
+                using (Bitmap bitmap = ThemedBitmap(colour, size))
+                {
+                    if (bitmap == null)
+                        return null;
+                    IntPtr handle = bitmap.GetHicon();
+                    try
+                    {
+                        using (Icon borrowed = Icon.FromHandle(handle))
+                            return (Icon)borrowed.Clone(); // The clone owns its own copy.
+                    }
+                    finally
+                    {
+                        DestroyIcon(handle);
+                    }
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>Writes the logo in the colour as a multi-size .ico, for shortcuts to show.</summary>
+        public static bool SaveThemedIconFile(Color colour, string path)
+        {
+            int[] sizes = { 16, 24, 32, 48, 64, 256 };
+            List<byte[]> images = new List<byte[]>();
+            try
+            {
+                foreach (int size in sizes)
+                {
+                    using (Bitmap bitmap = ThemedBitmap(colour, size))
+                    using (MemoryStream png = new MemoryStream())
+                    {
+                        if (bitmap == null)
+                            return false;
+                        bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                        images.Add(png.ToArray());
+                    }
+                }
+                using (MemoryStream file = new MemoryStream())
+                using (BinaryWriter writer = new BinaryWriter(file))
+                {
+                    // Icon header, then one entry per size, then the PNG images themselves.
+                    writer.Write((short)0);
+                    writer.Write((short)1);
+                    writer.Write((short)sizes.Length);
+                    int offset = 6 + 16 * sizes.Length, i;
+                    for (i = 0; i < sizes.Length; i++)
+                    {
+                        writer.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));
+                        writer.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));
+                        writer.Write((byte)0);
+                        writer.Write((byte)0);
+                        writer.Write((short)1);
+                        writer.Write((short)32);
+                        writer.Write(images[i].Length);
+                        writer.Write(offset);
+                        offset += images[i].Length;
+                    }
+                    foreach (byte[] image in images)
+                        writer.Write(image);
+                    writer.Flush();
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    string temporary = path + ".tmp";
+                    File.WriteAllBytes(temporary, file.ToArray());
+                    if (File.Exists(path))
+                        File.Delete(path);
+                    File.Move(temporary, path);
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Points shortcuts to this copy of mæla (desktop, Start menu, pinned to the taskbar) at
+        /// the icon file, so they follow the colour. Shortcuts to anything else, or to other copies
+        /// of mæla, are left alone. Runs on its own thread: reading shortcuts can be slow.
+        /// </summary>
+        public static void PointShortcutsAt(string iconPath)
+        {
+            string exe = Path.GetFullPath(Application.ExecutablePath);
+            string roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string[] flat = { Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Path.Combine(roaming, @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar") };
+            string[] deep = { Environment.GetFolderPath(Environment.SpecialFolder.StartMenu) };
+            Thread worker = new Thread(delegate()
+            {
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null)
+                    return;
+                object shell = null;
+                List<string> changed = new List<string>();
+                try
+                {
+                    shell = Activator.CreateInstance(shellType);
+                    List<string> links = new List<string>();
+                    foreach (string folder in flat)
+                        if (Directory.Exists(folder)) links.AddRange(Directory.GetFiles(folder, "*.lnk", SearchOption.TopDirectoryOnly));
+                    foreach (string folder in deep)
+                        if (Directory.Exists(folder)) links.AddRange(Directory.GetFiles(folder, "*.lnk", SearchOption.AllDirectories));
+                    string wanted = iconPath + ",0";
+                    foreach (string path in links)
+                    {
+                        object link = null;
+                        try
+                        {
+                            link = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { path });
+                            Type linkType = link.GetType();
+                            string target = linkType.InvokeMember("TargetPath", System.Reflection.BindingFlags.GetProperty, null, link, null) as string;
+                            if (String.IsNullOrEmpty(target) || !String.Equals(Path.GetFullPath(target), exe, StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            string icon = linkType.InvokeMember("IconLocation", System.Reflection.BindingFlags.GetProperty, null, link, null) as string;
+                            if (String.Equals(icon, wanted, StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            linkType.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, link, new object[] { wanted });
+                            linkType.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, link, null);
+                            changed.Add(path);
+                        }
+                        catch
+                        {
+                            // A shortcut we can't read or write (read-only, broken): skip it.
+                        }
+                        finally
+                        {
+                            if (link != null && Marshal.IsComObject(link))
+                                Marshal.ReleaseComObject(link);
+                        }
+                    }
+                }
+                catch { }
+                finally
+                {
+                    if (shell != null && Marshal.IsComObject(shell))
+                        Marshal.ReleaseComObject(shell);
+                }
+                // Tell Explorer, so the new icon shows without waiting for its cache.
+                foreach (string path in changed)
+                    SHChangeNotify(0x00002000 /* SHCNE_UPDATEITEM */, 0x0005 /* SHCNF_PATHW */, path, IntPtr.Zero);
+                if (changed.Count > 0)
+                    SHChangeNotify(0x08000000 /* SHCNE_ASSOCCHANGED */, 0x1000 /* SHCNF_FLUSHNOWAIT */, null, IntPtr.Zero);
+            });
+            worker.IsBackground = true;
+            worker.SetApartmentState(ApartmentState.STA);
+            worker.Start();
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern void SHChangeNotify(int eventId, int flags, string item1, IntPtr item2);
+
+        [DllImport("user32.dll")]
+        private static extern bool DestroyIcon(IntPtr handle);
+
+        /// <summary>
+        /// Gives the logo's pixels (blue, green, red, alpha) the colour's hue. Only the hue changes,
+        /// so the bubble keeps its shading and the bars stay white.
+        /// </summary>
+        public static void Recolour(byte[] bgra, Color colour)
+        {
+            double hue, ignoredS, ignoredL;
+            ToHsl(colour.R, colour.G, colour.B, out hue, out ignoredS, out ignoredL);
+            int i;
+            for (i = 0; i + 3 < bgra.Length; i += 4)
+            {
+                double h, s, l;
+                ToHsl(bgra[i + 2], bgra[i + 1], bgra[i], out h, out s, out l);
+                byte r, g, b;
+                FromHsl(hue, s, l, out r, out g, out b);
+                bgra[i] = b;
+                bgra[i + 1] = g;
+                bgra[i + 2] = r;
+            }
+        }
+
+        private static void ToHsl(byte red, byte green, byte blue, out double h, out double s, out double l)
+        {
+            double r = red / 255.0, g = green / 255.0, b = blue / 255.0;
+            double max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), d = max - min;
+            l = (max + min) / 2;
+            if (d < 1e-6)
+            {
+                h = 0;
+                s = 0;
+                return;
+            }
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            if (max == r) h = (g - b) / d + (g < b ? 6 : 0);
+            else if (max == g) h = (b - r) / d + 2;
+            else h = (r - g) / d + 4;
+            h /= 6;
+        }
+
+        private static void FromHsl(double h, double s, double l, out byte r, out byte g, out byte b)
+        {
+            if (s < 1e-6)
+            {
+                r = g = b = (byte)Math.Round(l * 255);
+                return;
+            }
+            double q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+            r = (byte)Math.Round(HueChannel(p, q, h + 1.0 / 3) * 255);
+            g = (byte)Math.Round(HueChannel(p, q, h) * 255);
+            b = (byte)Math.Round(HueChannel(p, q, h - 1.0 / 3) * 255);
+        }
+
+        private static double HueChannel(double p, double q, double t)
+        {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1.0 / 6) return p + (q - p) * 6 * t;
+            if (t < 0.5) return q;
+            if (t < 2.0 / 3) return p + (q - p) * (2.0 / 3 - t) * 6;
+            return p;
         }
     }
 
@@ -582,7 +873,7 @@ namespace Maela
         public bool EchoCancellation = true;
         public bool AutoUpdate = true;
         public string SkippedVersion = String.Empty;
-        public string Theme = "maela-red";
+        public string Theme = "midnight";
         public bool ClassicLayout; // The original window instead of the Spatial one.
         // Spatial circles, private to this PC. See MainForm.Spatial.cs for the format.
         public string RoomCircles = String.Empty;
@@ -795,7 +1086,7 @@ namespace Maela
                     "aec=" + (p.EchoCancellation ? "1" : "0"),
                     "updates=" + (p.AutoUpdate ? "1" : "0"),
                     "skip=" + (p.SkippedVersion == null ? String.Empty : p.SkippedVersion.Trim()),
-                    "theme=" + (p.Theme ?? "maela-red"),
+                    "theme=" + (p.Theme ?? "midnight"),
                     "classic=" + (p.ClassicLayout ? "1" : "0"),
                     "roomcircles=" + (p.RoomCircles ?? String.Empty),
                     "friendcircles=" + (p.FriendCircles ?? String.Empty),

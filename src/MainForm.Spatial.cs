@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -381,8 +382,7 @@ namespace Maela
                 ToolStripMenuItem more = new ToolStripMenuItem("More reactions…");
                 more.Click += delegate { SpatialPickEmoji(delegate(string text) { SpatialToggleReaction(friendId, key, text); }); };
                 menu.Items.Add(more);
-                menu.Closed += delegate { BeginInvoke((MethodInvoker)menu.Dispose); };
-                menu.Show(Cursor.Position);
+                ShowSpatialMenu(menu);
             });
         }
 
@@ -425,7 +425,10 @@ namespace Maela
             {
                 SelectRoomInList(room);
                 UpdateSelectedRoomUi();
-                _roomMenu.Show(Cursor.Position);
+                CancelEventArgs opening = new CancelEventArgs();
+                RoomMenuOpening(_roomMenu, opening);
+                if (!opening.Cancel)
+                    ShowSpatialMenu(_roomMenu);
             });
         }
 
@@ -441,7 +444,10 @@ namespace Maela
                     if (channel.Id == id)
                     {
                         _contextChannel = channel;
-                        _channelMenu.Show(Cursor.Position);
+                        CancelEventArgs opening = new CancelEventArgs();
+                        ChannelMenuOpening(_channelMenu, opening);
+                        if (!opening.Cancel)
+                            ShowSpatialMenu(_channelMenu);
                         return;
                     }
                 }
@@ -453,8 +459,10 @@ namespace Maela
             SpatialDialog(delegate
             {
                 _contextMember = FindMember(id);
-                if (_contextMember != null)
-                    _memberMenu.Show(Cursor.Position);
+                CancelEventArgs opening = new CancelEventArgs();
+                MemberMenuOpening(_memberMenu, opening);
+                if (_contextMember != null && !opening.Cancel)
+                    ShowSpatialMenu(_memberMenu);
             });
         }
 
@@ -469,8 +477,7 @@ namespace Maela
                 menu.ShowImageMargin = false;
                 menu.Items.Add("Voice channel", null, delegate { CreateChannelPrompt(false); });
                 menu.Items.Add("Chat-only channel", null, delegate { CreateChannelPrompt(true); });
-                menu.Closed += delegate { BeginInvoke((MethodInvoker)menu.Dispose); };
-                menu.Show(Cursor.Position);
+                ShowSpatialMenu(menu);
             });
         }
 
@@ -640,8 +647,7 @@ namespace Maela
                         SaveCircles();
                     });
                 }
-                menu.Closed += delegate { BeginInvoke((MethodInvoker)menu.Dispose); };
-                menu.Show(Cursor.Position);
+                ShowSpatialMenu(menu);
             });
         }
 
@@ -650,7 +656,75 @@ namespace Maela
 
         internal void SpatialAddFriend() { SpatialDialog(delegate { if (_friendsView != null) _friendsView.AddFriend(); }); }
         internal void SpatialCopyFriendCode() { SpatialDialog(delegate { if (_friendsView != null) _friendsView.CopyCode(); }); }
-        internal void SpatialFriendMenu(string id) { SpatialDialog(delegate { if (_friendsView != null) _friendsView.ShowPersonMenu(id, null, Cursor.Position); }); }
+        internal void SpatialFriendMenu(string id)
+        {
+            SpatialDialog(delegate
+            {
+                if (_friendsView == null)
+                    return;
+                ContextMenuStrip menu = _friendsView.BuildPersonMenu(id);
+                if (menu != null)
+                    ShowSpatialMenu(menu);
+            });
+        }
+
+        // ----- Menus. Classic builds them, so the items and what they do are the same in both
+        // layouts; Spatial draws them, and a click runs the Classic item here. -----
+
+        private readonly List<ToolStripItem> _spatialMenuItems = new List<ToolStripItem>();
+        private ContextMenuStrip _spatialMenuOwned; // A one-off menu built for Spatial, freed with the next.
+
+        private void ShowSpatialMenu(ContextMenuStrip menu)
+        {
+            bool shared = menu == _roomMenu || menu == _channelMenu || menu == _memberMenu;
+            if (_spatialMenuOwned != null && _spatialMenuOwned != menu)
+                _spatialMenuOwned.Dispose();
+            _spatialMenuOwned = shared ? null : menu;
+            _spatialMenuItems.Clear();
+            List<SpatialMenuEntry> entries = MenuEntries(menu.Items);
+            if (entries.Count > 0)
+                SpatialTest.ShowMenu(entries);
+        }
+
+        private List<SpatialMenuEntry> MenuEntries(ToolStripItemCollection items)
+        {
+            List<SpatialMenuEntry> entries = new List<SpatialMenuEntry>();
+            foreach (ToolStripItem item in items)
+            {
+                if (!item.Available)
+                    continue;
+                SpatialMenuEntry entry = new SpatialMenuEntry();
+                if (item is ToolStripSeparator)
+                {
+                    entry.Separator = true;
+                    entries.Add(entry);
+                    continue;
+                }
+                entry.Text = item.Text.Replace("&&", "&");
+                entry.Enabled = item.Enabled;
+                entry.Picture = SpatialPicture(item.Image);
+                ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+                if (menuItem != null)
+                {
+                    entry.Checked = menuItem.Checked;
+                    if (menuItem.HasDropDownItems)
+                        entry.Children = MenuEntries(menuItem.DropDownItems);
+                }
+                entry.Id = _spatialMenuItems.Count;
+                _spatialMenuItems.Add(item);
+                entries.Add(entry);
+            }
+            return entries;
+        }
+
+        internal void SpatialMenuClicked(int id)
+        {
+            SpatialDo(delegate
+            {
+                if (id >= 0 && id < _spatialMenuItems.Count)
+                    _spatialMenuItems[id].PerformClick();
+            });
+        }
         internal void SpatialAcceptFriend(string id) { SpatialDo(delegate { if (_friends != null) _friends.AcceptRequest(id); }); }
         internal void SpatialBlockFriend(string id) { SpatialDo(delegate { if (_friends != null) _friends.Block(id); }); }
 
@@ -664,8 +738,7 @@ namespace Maela
                 menu.Renderer = new ThemedMenuRenderer();
                 menu.Items.Add("Back up my account…", null, delegate { _friendsView.BackUp(); });
                 menu.Items.Add("Restore from a backup…", null, delegate { _friendsView.Restore(); });
-                menu.Closed += delegate { BeginInvoke((MethodInvoker)menu.Dispose); };
-                menu.Show(Cursor.Position);
+                ShowSpatialMenu(menu);
             });
         }
 

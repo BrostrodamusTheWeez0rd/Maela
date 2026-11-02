@@ -10,7 +10,7 @@ Current release: **0.12.0**. Open source under the MIT License.
 
 ## Highlights
 
-- Modern native Windows UI with four themes: Maela Red, Midnight, Daylight and OLED Black
+- Modern native Windows UI in two layouts, Spatial and Lightweight, with nine colour schemes, Midnight by default
 - Direct self-hosted UDP voice rooms
 - 48 kHz mono Opus voice with packet-loss recovery
 - Automatic free local UDP port selection

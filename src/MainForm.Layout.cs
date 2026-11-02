@@ -246,8 +246,47 @@ namespace Maela
             _addMenu.Renderer = renderer;
             ApplyChatTheme();
             Ui.StyleWindowFrame(this);
+            UpdateAppIcons();
             Invalidate(true);
         }
+
+        private Icon _themedIcon, _themedTrayIcon;
+
+        /// <summary>The window and tray icons take the theme's logo colour. If that fails, they keep the exe's icon.</summary>
+        private void UpdateAppIcons()
+        {
+            Icon icon = Branding.ThemedIcon(Theme.Current.Logo, 32);
+            Icon tray = Branding.ThemedIcon(Theme.Current.Logo, SystemInformation.SmallIconSize.Width);
+            if (icon == null || tray == null)
+                return;
+            Icon = icon;
+            _notifyIcon.Icon = tray;
+            if (_themedIcon != null) _themedIcon.Dispose();
+            if (_themedTrayIcon != null) _themedTrayIcon.Dispose();
+            _themedIcon = icon;
+            _themedTrayIcon = tray;
+
+            // Shortcuts follow too, once the colour has settled: clicking through the colours in
+            // Settings shouldn't rewrite shortcuts on every click.
+            if (_shortcutIconTimer == null)
+            {
+                _shortcutIconTimer = new System.Windows.Forms.Timer();
+                _shortcutIconTimer.Interval = 1500;
+                _shortcutIconTimer.Tick += delegate
+                {
+                    _shortcutIconTimer.Stop();
+                    Theme theme = Theme.Current;
+                    // One file per colour, so Explorer sees a new icon rather than a cached one.
+                    string path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Maela", "Icons", "Maela-" + theme.Id + ".ico");
+                    if (Branding.SaveThemedIconFile(theme.Logo, path))
+                        Branding.PointShortcutsAt(path);
+                };
+            }
+            _shortcutIconTimer.Stop();
+            _shortcutIconTimer.Start();
+        }
+
+        private System.Windows.Forms.Timer _shortcutIconTimer;
 
         protected override void OnHandleCreated(EventArgs e)
         {

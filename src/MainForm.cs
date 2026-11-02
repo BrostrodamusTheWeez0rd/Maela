@@ -90,6 +90,7 @@ namespace Maela
 
             _notifyIcon.Text = "m\u00E6la";
             try { _notifyIcon.Icon = Branding.LoadAppIcon(); } catch { _notifyIcon.Icon = SystemIcons.Application; }
+            UpdateAppIcons();
             _notifyIcon.Visible = true;
             _notifyIcon.MouseClick += delegate(object s, MouseEventArgs me) { if (me.Button == MouseButtons.Left) RestoreFromTray(); };
             ContextMenuStrip trayMenu = new ContextMenuStrip();
@@ -1556,7 +1557,9 @@ namespace Maela
             menu.Items.Add(new ToolStripSeparator());
             AddStatusItems(menu.Items);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(_engine != null && _engine.IsRunning && _engine.IsHost ? "Stop room and quit" : "Quit m\u00E6la", null, delegate { QuitApp(); });
+            // Quit once this menu has finished closing: quitting disposes the tray icon, and the
+            // menu still uses it while the click is being handled.
+            menu.Items.Add(_engine != null && _engine.IsRunning && _engine.IsHost ? "Stop room and quit" : "Quit m\u00E6la", null, delegate { BeginInvoke((MethodInvoker)QuitApp); });
         }
 
         /// <summary>Really exits: leaves the room properly (or stops a hosted one) and closes.</summary>
