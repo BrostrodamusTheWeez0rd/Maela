@@ -6,6 +6,8 @@
   accept, click them to chat. Your encryption key is your account, so a new IP address never ends
   a friendship. There are no accounts and no server: messages go directly between your two PCs,
   and wait encrypted on the sender's PC until you're both online.
+- **Friend chats have everything room chat does.** Colour emoji, an emoji picker, reactions and
+  search.
 - **Call your friends.** Click Call on a friend who's online. It rings until they answer, then
   starts a private room just for the two of you, with screen sharing and everything else a room
   has. Busy doesn't ring: you get a missed call in the chat.

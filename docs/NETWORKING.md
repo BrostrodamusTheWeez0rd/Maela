@@ -174,7 +174,9 @@ Every datagram starts with magic `MFR1` (4) and a type (1).
   it there is no reply, so the listener can't be discovered by scanning. Listeners also limit
   handshakes to 10 per IP per 10 seconds.
 - Inside DATA: READY, PING (status, name, current code), REQUEST and ACCEPT (name, code), MESSAGE
-  (number, time, text), ACK and BYE.
+  (number, time, message id, reaction target, text), ACK and BYE. A MESSAGE with a reaction target
+  is a reaction: its text must be a known emoji and the target a real message, or it's dropped.
+  Sending the same one again takes it away.
 - A stranger's session accepts only REQUEST and never receives PING. ACCEPT counts only from the
   exact key you sent a request to. If two people request each other, they become friends, because
   each has already chosen the other's key.

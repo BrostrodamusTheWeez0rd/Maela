@@ -586,15 +586,17 @@ namespace Maela
         private readonly FlatButton _blockButton = new FlatButton();
         private readonly FlatButton _updateCodeButton = new FlatButton();
         private readonly RichTextBox _chat = new RichTextBox();
+        private readonly FriendChatView _chatView = new FriendChatView();
+        private readonly Panel _chatHost = new Panel();
+        private readonly RoundField _search = new RoundField(IconKind.Search);
+        private readonly FlatButton _emojiButton = new FlatButton();
+        private string _viewShownFor;
         private readonly Panel _composer = new Panel();
         private readonly RoundField _input = new RoundField(IconKind.None);
         private readonly FlatButton _sendButton = new FlatButton();
         private readonly System.Windows.Forms.Timer _timer = new System.Windows.Forms.Timer();
         private string _selectedId;
         private int _versionShown = -1;
-        private int _chatCountShown = -1;
-        private int _chatDeliveredShown = -1;
-        private string _chatIdShown;
         private bool _addressChanged;
         private string _callStatus;
         private readonly FlatButton _backupButton = new FlatButton();
@@ -688,14 +690,30 @@ namespace Maela
             _callButton.Size = new Size(84, 34);
             _callButton.Click += delegate { if (_selectedId != null && Call != null) Call(_selectedId); };
             head.Controls.Add(_callButton);
+            _search.Placeholder = "Search this chat";
+            _search.Box.TextChanged += delegate
+            {
+                _chatView.SetFilter(_search.Box.Text);
+                RefreshAll(true);
+            };
+            _search.Box.KeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Escape)
+                {
+                    _search.Box.Clear();
+                    e.SuppressKeyPress = true;
+                }
+            };
+            head.Controls.Add(_search);
             head.Resize += delegate
             {
                 _blockButton.Location = new Point(head.Width - 150, 14);
                 _acceptButton.Location = new Point(head.Width - 244, 14);
                 _updateCodeButton.Location = new Point(head.Width - 144, 14);
                 _callButton.Location = new Point(head.Width - 98, 14);
+                _search.SetBounds(head.Width - 256, 15, 150, 32);
                 // Stop short of the buttons, so long names can't cover them.
-                _title.Width = Math.Max(80, head.Width - 270);
+                _title.Width = Math.Max(80, head.Width - 290);
                 _subtitle.Width = _title.Width;
             };
 
@@ -737,11 +755,17 @@ namespace Maela
             _sendButton.Icon = IconKind.Send;
             _sendButton.Look = ButtonLook.Primary;
             _sendButton.Click += delegate { SendCurrent(); };
+            _emojiButton.Icon = IconKind.Smile;
+            _emojiButton.Look = ButtonLook.Ghost;
+            _emojiButton.IconSize = 20;
+            _emojiButton.Click += delegate { PickEmoji(); };
             _composer.Controls.Add(_input);
+            _composer.Controls.Add(_emojiButton);
             _composer.Controls.Add(_sendButton);
             _composer.Resize += delegate
             {
-                _input.SetBounds(16, 10, _composer.Width - 84, 42);
+                _input.SetBounds(16, 10, _composer.Width - 126, 42);
+                _emojiButton.SetBounds(_composer.Width - 102, 13, 36, 36);
                 _sendButton.SetBounds(_composer.Width - 58, 10, 42, 42);
             };
 
@@ -751,11 +775,16 @@ namespace Maela
             _chat.DetectUrls = false; // Text from other people is only ever shown.
             _chat.TabStop = false;
             _chat.Font = Ui.Body;
-            Panel chatHost = new Panel();
-            chatHost.Dock = DockStyle.Fill;
-            chatHost.Padding = new Padding(20, 6, 12, 6);
-            chatHost.Controls.Add(_chat);
-            _right.Controls.Add(chatHost);
+            _chatHost.Dock = DockStyle.Fill;
+            _chatHost.Controls.Add(_chat);
+            _chatView.Dock = DockStyle.Fill;
+            _chatView.ReactRequested += delegate(ulong messageId, string emoji)
+            {
+                if (_selectedId != null)
+                    _friends.ToggleReaction(_selectedId, messageId, emoji);
+            };
+            _chatHost.Controls.Add(_chatView);
+            _right.Controls.Add(_chatHost);
             _right.Controls.Add(_composer);
             _right.Controls.Add(_notice);
             _right.Controls.Add(head);
@@ -807,9 +836,13 @@ namespace Maela
             _notice.ForeColor = t.Text2;
             _chat.BackColor = t.Main;
             _chat.ForeColor = t.Text;
+            _chatView.BackColor = t.Main;
+            _chatView.ForeColor = t.Text;
             _input.Fill = t.Surface;
             _input.ApplyTheme();
-            _chatIdShown = null;
+            _search.Fill = t.Surface;
+            _search.ApplyTheme();
+            _viewShownFor = null;
             Invalidate(true);
         }
 
@@ -962,6 +995,23 @@ namespace Maela
                 MessageBox.Show(this, message, "Add a friend", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
+        private void PickEmoji()
+        {
+            EmojiPicker picker = new EmojiPicker();
+            picker.BackColor = Theme.Current.Surface;
+            Point screen = _emojiButton.PointToScreen(new Point(_emojiButton.Width - picker.Width, -picker.Height - 8));
+            Rectangle area = Screen.FromControl(this).WorkingArea;
+            picker.Location = new Point(Math.Max(area.Left + 4, Math.Min(screen.X, area.Right - picker.Width - 4)), Math.Max(area.Top + 4, screen.Y));
+            picker.Picked += delegate(EmojiEntry entry)
+            {
+                int caret = _input.Box.SelectionStart;
+                _input.Box.Text = _input.Box.Text.Insert(caret, entry.Text);
+                _input.Box.SelectionStart = caret + entry.Text.Length;
+                _input.Box.Focus();
+            };
+            picker.Show(this);
+        }
+
         private void SendCurrent()
         {
             if (_selectedId == null)
@@ -1055,7 +1105,10 @@ namespace Maela
             bool isRequest = person != null && person.State == FriendState.RequestReceived;
             bool longUnreachable = isFriend && person.Status == FriendStatus.Offline && (DateTime.UtcNow - person.LastSeenUtc).TotalDays >= 2.0;
             _composer.Visible = isFriend;
-            _chat.Visible = person != null;
+            _chat.Visible = person != null && !isFriend;
+            _chatView.Visible = isFriend;
+            _chatHost.Padding = isFriend ? new Padding(0) : new Padding(20, 6, 12, 6);
+            _search.Visible = isFriend;
             _acceptButton.Visible = isRequest;
             _blockButton.Visible = isRequest;
             _updateCodeButton.Visible = longUnreachable;
@@ -1067,7 +1120,7 @@ namespace Maela
             if (!isFriend)
             {
                 _chat.Clear();
-                _chatIdShown = null;
+                _viewShownFor = null;
                 if (isRequest)
                 {
                     _chat.SelectionColor = Theme.Current.Text2;
@@ -1105,40 +1158,11 @@ namespace Maela
 
         private void ShowChat(FriendInfo person)
         {
-            List<FriendChatEntry> chat = _friends.GetChat(person.Id);
-            int delivered = 0;
-            foreach (FriendChatEntry entry in chat)
-            {
-                if (entry.Delivered)
-                    delivered++;
-            }
-            if (_chatIdShown == person.Id && _chatCountShown == chat.Count && _chatDeliveredShown == delivered)
-                return;
-            _chatIdShown = person.Id;
-            _chatCountShown = chat.Count;
-            _chatDeliveredShown = delivered;
-
-            Theme t = Theme.Current;
-            _chat.SuspendLayout();
-            _chat.Clear();
-            foreach (FriendChatEntry entry in chat)
-            {
-                _chat.SelectionFont = Ui.SmallBold;
-                _chat.SelectionColor = entry.Mine ? t.Accent2 : t.Text;
-                _chat.AppendText(entry.Mine ? "You" : person.Name);
-                _chat.SelectionFont = Ui.Small;
-                _chat.SelectionColor = t.Muted;
-                string when = "  " + entry.TimeUtc.ToLocalTime().ToString("g");
-                if (entry.Mine && !entry.Delivered)
-                    when += "  ·  waiting to send";
-                _chat.AppendText(when + "\n");
-                _chat.SelectionFont = Ui.Body;
-                _chat.SelectionColor = t.Text;
-                _chat.AppendText(entry.Text + "\n\n");
-            }
-            _chat.SelectionStart = _chat.TextLength;
-            _chat.ScrollToCaret();
-            _chat.ResumeLayout();
+            bool switched = _viewShownFor != person.Id;
+            if (switched && _search.Box.Text.Length > 0)
+                _search.Box.Clear();
+            _viewShownFor = person.Id;
+            _chatView.Show(_friends.GetChat(person.Id), person.Name, "You", switched);
         }
 
         private static string Describe(FriendInfo person)

@@ -19,6 +19,7 @@ Before tagging a public build:
 - [ ] Backup and restore: back up on one PC, restore on another with the right password (a wrong one is refused), a friend pastes the new code, and messages flow both ways with no new request.
 - [ ] Friend calls between two machines on different networks: ring, accept, talk both ways, and hanging up on either side ends it for both. Declining, nobody answering and Busy (a missed call in the chat) all behave.
 - [ ] A call from inside a room asks first. Password rooms work with both sides on this version, and an older client can still join an updated host.
+- [ ] Friend chats: colour emoji and the picker work, reactions show on both sides and clicking one takes yours away, and search filters and highlights.
 - [ ] Friends window looks right in each theme, and blocking and removing work from the right-click menu.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.

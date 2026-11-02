@@ -254,6 +254,15 @@ namespace Maela
         public string Text;
         public ulong Sequence;
         public bool Delivered;
+        public ulong MessageId;  // Stays the same if numbering restarts. 0: can't be reacted to.
+        public ulong ReactionTo; // Not 0: this is a reaction to that message, and Text is the emoji.
+    }
+
+    internal sealed class FriendReaction
+    {
+        public string Emoji;
+        public int Count;
+        public bool Mine;
     }
 
     /// <summary>
@@ -270,6 +279,52 @@ namespace Maela
         {
             _path = path;
             Load();
+        }
+
+        /// <summary>Each person's reaction turns on and off in order; what's left on is what shows.</summary>
+        public static Dictionary<ulong, List<FriendReaction>> Summarize(List<FriendChatEntry> entries)
+        {
+            Dictionary<ulong, List<FriendReaction>> result = new Dictionary<ulong, List<FriendReaction>>();
+            Dictionary<string, bool> on = new Dictionary<string, bool>(StringComparer.Ordinal);
+            List<FriendChatEntry> order = new List<FriendChatEntry>();
+            foreach (FriendChatEntry entry in entries)
+            {
+                if (entry.ReactionTo == 0)
+                    continue;
+                string key = entry.ReactionTo + "|" + entry.Text + "|" + entry.Mine;
+                bool current;
+                on.TryGetValue(key, out current);
+                on[key] = !current;
+                order.Add(entry);
+            }
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (FriendChatEntry entry in order)
+            {
+                string key = entry.ReactionTo + "|" + entry.Text + "|" + entry.Mine;
+                if (!seen.Add(key) || !on[key])
+                    continue;
+                List<FriendReaction> list;
+                if (!result.TryGetValue(entry.ReactionTo, out list))
+                {
+                    list = new List<FriendReaction>();
+                    result[entry.ReactionTo] = list;
+                }
+                FriendReaction reaction = list.Find(delegate(FriendReaction r) { return r.Emoji == entry.Text; });
+                if (reaction == null)
+                {
+                    reaction = new FriendReaction();
+                    reaction.Emoji = entry.Text;
+                    list.Add(reaction);
+                }
+                reaction.Count++;
+                reaction.Mine |= entry.Mine;
+            }
+            return result;
+        }
+
+        public bool HasMessage(ulong messageId)
+        {
+            return messageId != 0 && Entries.Exists(delegate(FriendChatEntry e) { return e.MessageId == messageId && e.ReactionTo == 0; });
         }
 
         public void Add(FriendChatEntry entry)
@@ -346,7 +401,7 @@ namespace Maela
             for (i = 0; i < lines.Length; i++)
             {
                 string[] parts = lines[i].Split('|');
-                if (parts.Length != 5)
+                if (parts.Length != 5 && parts.Length != 7)
                     continue;
                 long ticks;
                 ulong sequence;
@@ -359,6 +414,11 @@ namespace Maela
                 entry.Delivered = parts[3] == "1";
                 try { entry.Text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[4])); }
                 catch { continue; }
+                if (parts.Length == 7)
+                {
+                    UInt64.TryParse(parts[5], out entry.MessageId);
+                    UInt64.TryParse(parts[6], out entry.ReactionTo);
+                }
                 Entries.Add(entry);
             }
         }
@@ -371,7 +431,8 @@ namespace Maela
                 foreach (FriendChatEntry entry in Entries)
                 {
                     text.Append(entry.Mine ? "1" : "0").Append('|').Append(entry.TimeUtc.Ticks).Append('|').Append(entry.Sequence).Append('|')
-                        .Append(entry.Delivered ? "1" : "0").Append('|').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.Text))).Append('\n');
+                        .Append(entry.Delivered ? "1" : "0").Append('|').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.Text))).Append('|')
+                        .Append(entry.MessageId).Append('|').Append(entry.ReactionTo).Append('\n');
                 }
                 EncryptedFile.Write(_path, Encoding.UTF8.GetBytes(text.ToString()));
             }
@@ -422,6 +483,7 @@ namespace Maela
         public const int MaxMessageChars = 400;
         private const int MaxMessageBytes = 1100;
         private const int MaxNameChars = 24;
+        private const int MessageHeaderBytes = 37;
 
         private const byte InnerReady = 0;
         private const byte InnerPing = 1;
@@ -1070,6 +1132,7 @@ namespace Maela
                 entry.Mine = true;
                 entry.TimeUtc = DateTime.UtcNow;
                 entry.Text = clean;
+                entry.MessageId = NewMessageId();
                 entry.Sequence = ++person.LastSent;
                 person.Outbox.Add(entry);
                 Save();
@@ -1078,6 +1141,41 @@ namespace Maela
                 FlushOutbox(person);
                 return true;
             }
+        }
+
+        /// <summary>Turns your reaction on a message on or off. Delivered like a message, so it can wait too.</summary>
+        public bool ToggleReaction(string id, ulong messageId, string emoji)
+        {
+            EmojiEntry known = EmojiPack.Find(emoji);
+            if (known == null)
+                return false;
+            lock (_lock)
+            {
+                Person person;
+                if (!_people.TryGetValue(id, out person) || person.State != FriendState.Friend || person.Outbox.Count >= MaxOutbox || !ChatOf(person).HasMessage(messageId))
+                    return false;
+                FriendChatEntry entry = new FriendChatEntry();
+                entry.Mine = true;
+                entry.TimeUtc = DateTime.UtcNow;
+                entry.Text = known.Text;
+                entry.MessageId = NewMessageId();
+                entry.ReactionTo = messageId;
+                entry.Sequence = ++person.LastSent;
+                person.Outbox.Add(entry);
+                Save();
+                ChatOf(person).Add(entry);
+                Bump();
+                FlushOutbox(person);
+                return true;
+            }
+        }
+
+        private static ulong NewMessageId()
+        {
+            ulong id = 0;
+            while (id == 0)
+                id = BitConverter.ToUInt64(CryptoUtil.Random(8), 0);
+            return id;
         }
 
         // ----- Backup -----
@@ -1849,12 +1947,14 @@ namespace Maela
             {
                 FriendChatEntry entry = person.Outbox[i];
                 byte[] text = Encoding.UTF8.GetBytes(entry.Text);
-                byte[] inner = new byte[21 + text.Length];
+                byte[] inner = new byte[MessageHeaderBytes + text.Length];
                 inner[0] = InnerMessage;
                 Buffer.BlockCopy(BitConverter.GetBytes(_incarnation), 0, inner, 1, 4);
                 Buffer.BlockCopy(BitConverter.GetBytes(entry.Sequence), 0, inner, 5, 8);
                 Buffer.BlockCopy(BitConverter.GetBytes(entry.TimeUtc.Ticks), 0, inner, 13, 8);
-                Buffer.BlockCopy(text, 0, inner, 21, text.Length);
+                Buffer.BlockCopy(BitConverter.GetBytes(entry.MessageId), 0, inner, 21, 8);
+                Buffer.BlockCopy(BitConverter.GetBytes(entry.ReactionTo), 0, inner, 29, 8);
+                Buffer.BlockCopy(text, 0, inner, MessageHeaderBytes, text.Length);
                 SendInner(session, inner);
             }
         }
@@ -1862,7 +1962,7 @@ namespace Maela
         /// <summary>Only accepted friends get here. Everyone else's messages are dropped unread.</summary>
         private void HandleMessage(Person person, byte[] inner)
         {
-            if (person == null || person.State != FriendState.Friend || person.Current == null || inner.Length < 22 || inner.Length > 21 + MaxMessageBytes)
+            if (person == null || person.State != FriendState.Friend || person.Current == null || inner.Length <= MessageHeaderBytes || inner.Length > MessageHeaderBytes + MaxMessageBytes)
                 return;
             ApplyIncarnation(person, BitConverter.ToUInt32(inner, 1));
             ulong sequence = BitConverter.ToUInt64(inner, 5);
@@ -1874,10 +1974,29 @@ namespace Maela
             if (sequence != person.LastReceived + 1 || !person.AllowMessage())
                 return; // Out of order or too fast. No acknowledgement, so it comes again.
 
-            string text = CleanText(Encoding.UTF8.GetString(inner, 21, inner.Length - 21));
+            string text = CleanText(Encoding.UTF8.GetString(inner, MessageHeaderBytes, inner.Length - MessageHeaderBytes));
             long ticks = BitConverter.ToInt64(inner, 13);
+            ulong messageId = BitConverter.ToUInt64(inner, 21);
+            ulong reactionTo = BitConverter.ToUInt64(inner, 29);
             person.LastReceived = sequence;
-            if (text.Length > 0)
+            if (reactionTo != 0)
+            {
+                // A known emoji on a real message, or nothing. Reactions make no sound and aren't unread.
+                EmojiEntry emoji = EmojiPack.Find(text);
+                if (emoji != null && ChatOf(person).HasMessage(reactionTo))
+                {
+                    FriendChatEntry reaction = new FriendChatEntry();
+                    reaction.TimeUtc = DateTime.UtcNow;
+                    reaction.Text = emoji.Text;
+                    reaction.Sequence = sequence;
+                    reaction.Delivered = true;
+                    reaction.MessageId = messageId;
+                    reaction.ReactionTo = reactionTo;
+                    ChatOf(person).Add(reaction);
+                }
+                text = String.Empty;
+            }
+            else if (text.Length > 0)
             {
                 FriendChatEntry entry = new FriendChatEntry();
                 // The sender's clock can't push a message into the past or future.
@@ -1887,6 +2006,7 @@ namespace Maela
                 entry.Text = text;
                 entry.Sequence = sequence;
                 entry.Delivered = true;
+                entry.MessageId = messageId;
                 ChatOf(person).Add(entry);
                 person.Unread++;
             }
@@ -2224,13 +2344,18 @@ namespace Maela
                         person.PeerIncarnation = UInt32.Parse(parts[10]);
                         _people[person.Id] = person;
                     }
-                    else if (parts[0] == "o" && parts.Length == 5)
+                    else if (parts[0] == "o" && (parts.Length == 5 || parts.Length == 7))
                     {
                         FriendChatEntry entry = new FriendChatEntry();
                         entry.Mine = true;
                         entry.Sequence = UInt64.Parse(parts[2]);
                         entry.TimeUtc = new DateTime(Int64.Parse(parts[3]), DateTimeKind.Utc);
                         entry.Text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[4]));
+                        if (parts.Length == 7)
+                        {
+                            entry.MessageId = UInt64.Parse(parts[5]);
+                            entry.ReactionTo = UInt64.Parse(parts[6]);
+                        }
                         Person owner;
                         if (_people.TryGetValue(parts[1], out owner))
                             owner.Outbox.Add(entry);
@@ -2279,7 +2404,8 @@ namespace Maela
                 foreach (FriendChatEntry entry in person.Outbox)
                 {
                     text.Append("o|").Append(person.Id).Append('|').Append(entry.Sequence).Append('|').Append(entry.TimeUtc.Ticks).Append('|')
-                        .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.Text))).Append('\n');
+                        .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.Text))).Append('|')
+                        .Append(entry.MessageId).Append('|').Append(entry.ReactionTo).Append('\n');
                 }
             }
             return text.ToString();

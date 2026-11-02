@@ -260,12 +260,12 @@ namespace Maela.Tests
             Check(WaitFor(delegate { return IsState(target, attacker.Id, FriendState.RequestReceived); }, 3000), "the attacker gets as far as a request");
 
             byte[] text = Encoding.UTF8.GetBytes("you never accepted me");
-            byte[] message = new byte[21 + text.Length];
+            byte[] message = new byte[37 + text.Length];
             message[0] = Message;
             BitConverter.GetBytes((uint)1234).CopyTo(message, 1);
             BitConverter.GetBytes((ulong)1).CopyTo(message, 5);
             BitConverter.GetBytes(DateTime.UtcNow.Ticks).CopyTo(message, 13);
-            text.CopyTo(message, 21);
+            text.CopyTo(message, 37);
             byte[] accept = new byte[] { Accept, 0, 0 };
             byte[] ping = new byte[] { Ping, (byte)FriendStatus.Online, 1, 2, 3, 4, 3, (byte)'B', (byte)'o', (byte)'b', 0 };
             byte[] ack = new byte[9];
@@ -745,6 +745,73 @@ namespace Maela.Tests
             stranger.Dispose();
         }
 
+        static void Reactions()
+        {
+            string aFolder = NewFolder();
+            FriendService a = Online("Alice", aFolder);
+            FriendService b = Online("Bob");
+            MakeFriends(a, b);
+            string aId = a.Id;
+            string bId = b.Id;
+            a.SendMessage(bId, "react to this \U0001F600");
+            WaitFor(delegate { return b.GetChat(aId).Count == 1; }, 3000);
+            Check(b.GetChat(aId)[0].Text.Contains("\U0001F600"), "emoji arrive intact");
+            ulong id = b.GetChat(aId)[0].MessageId;
+            Check(id != 0 && id == a.GetChat(bId)[0].MessageId, "both sides know the message by the same id");
+            b.MarkRead(aId);
+
+            string thumb = EmojiPack.All[0].Text;
+            int unreadBefore = Find(a, bId).Unread;
+            List<string> heard = new List<string>();
+            a.MessageReceived += delegate(string who, string text) { lock (heard) heard.Add(text); };
+            Check(b.ToggleReaction(aId, id, thumb), "you can react to a message");
+            Check(WaitFor(delegate { return FriendChat.Summarize(a.GetChat(bId)).ContainsKey(id); }, 3000), "the reaction reaches the sender");
+            FriendReaction seen = FriendChat.Summarize(a.GetChat(bId))[id][0];
+            Check(seen.Emoji == thumb && seen.Count == 1 && !seen.Mine, "with the right emoji, from them");
+            Check(FriendChat.Summarize(b.GetChat(aId))[id][0].Mine, "and shows as yours on your side");
+            Thread.Sleep(150);
+            Check(Find(a, bId).Unread == unreadBefore, "a reaction doesn't count as unread");
+            lock (heard) Check(heard.Count == 0, "and makes no notification");
+
+            a.ToggleReaction(bId, id, thumb);
+            Check(WaitFor(delegate { List<FriendReaction> l; return FriendChat.Summarize(b.GetChat(aId)).TryGetValue(id, out l) && l[0].Count == 2 && l[0].Mine; }, 3000), "both of you can use the same reaction");
+            b.ToggleReaction(aId, id, thumb);
+            Check(WaitFor(delegate { List<FriendReaction> l; return FriendChat.Summarize(a.GetChat(bId)).TryGetValue(id, out l) && l[0].Count == 1 && l[0].Mine; }, 3000), "clicking again takes yours away");
+
+            Check(!a.ToggleReaction(bId, id, "not an emoji"), "only known emoji can be reactions");
+            Check(!a.ToggleReaction(bId, 123456, thumb), "only real messages can be reacted to");
+
+            // A modified copy tries anyway.
+            int countBefore = a.GetChat(bId).Count;
+            byte[] word = Encoding.UTF8.GetBytes("<script>");
+            ulong next = 100;
+            byte[] forged = new byte[37 + word.Length];
+            forged[0] = 4;
+            BitConverter.GetBytes(next).CopyTo(forged, 5);
+            BitConverter.GetBytes(id).CopyTo(forged, 29);
+            word.CopyTo(forged, 37);
+            b.SendInnerForTests(aId, forged);
+            Thread.Sleep(200);
+            Check(a.GetChat(bId).Count == countBefore, "a fake reaction out of order is dropped");
+            Check(a.SendMessage(bId, "still fine"), "and the chat carries on");
+            Check(WaitFor(delegate { return a.GetChat(bId)[a.GetChat(bId).Count - 1].Delivered; }, 3000), "with no harm done");
+
+            // Reactions are in the chat file, so they survive a restart.
+            a.Dispose();
+            a = Online("Alice", aFolder);
+            Check(FriendChat.Summarize(a.GetChat(bId)).ContainsKey(id), "reactions survive a restart");
+            a.Dispose();
+            b.Dispose();
+
+            // Files written before reactions still load.
+            string old = NewFolder();
+            Directory.CreateDirectory(old);
+            string chatFile = Path.Combine(old, "old.dat");
+            EncryptedFile.Write(chatFile, Encoding.UTF8.GetBytes("1|" + DateTime.UtcNow.Ticks + "|1|1|" + Convert.ToBase64String(Encoding.UTF8.GetBytes("old message")) + "\n"));
+            FriendChat chat = new FriendChat(chatFile);
+            Check(chat.Entries.Count == 1 && chat.Entries[0].Text == "old message" && chat.Entries[0].MessageId == 0, "older chat files still load");
+        }
+
         static void Sanitising()
         {
             Check(FriendService.CleanName("Bob‮evil\u0000\n") == "Bobevil", "names lose invisible and direction characters");
@@ -769,6 +836,7 @@ namespace Maela.Tests
                 RoomPasswordProof();
                 NameChanges();
                 Calls();
+                Reactions();
                 BlockAndRemove();
                 Isolation();
                 NothingReadableOnDisk();
