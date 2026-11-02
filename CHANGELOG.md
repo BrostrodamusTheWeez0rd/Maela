@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 - Friends
 
 - **Friends.** Everyone gets a friend code. Paste someone's code to send a request; once they
   accept, click them to chat. Your encryption key is your account, so a new IP address never ends

@@ -6,7 +6,7 @@
 
 **mæla** is a lightweight self-hosted Windows voice-room app. One person hosts, friends join with a short room code, and the host relays voice directly without accounts or a permanent central service.
 
-Current release: **0.10.0**. Open source under the MIT License.
+Current release: **0.11.0**. Open source under the MIT License.
 
 ## Highlights
 
@@ -19,6 +19,8 @@ Current release: **0.10.0**. Open source under the MIT License.
 - Room codes that verify the host's identity, such as `M-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX`
 - Opus voice that only sends when you speak (voice detection ignores typing and clicks): roughly 60 kbps per person talking, nothing while quiet
 - Saved rooms with online/offline probing
+- Friends with no accounts or server: add someone with their friend code, then chat, react and call directly
+- Online, Away, Busy and Offline statuses; Offline turns friends off completely
 - Voice channels with their own text chat, plus chat-only channels; one click opens a chat, double-click joins voice
 - Screen sharing: whole screen or one window, up to 4K and 120 fps, direct to viewers, encoded and decoded on your graphics card when it can, viewed in a locked-down sandbox
 - Profile cards with a picture and status line (pictures are shared as plain pixels, never files)
@@ -46,6 +48,14 @@ A room code contains the host's address and a fingerprint of the host's encrypti
 The host can also set a **room password** when hosting, or later from the room's right-click menu.
 
 > **Upgrading from 0.6?** 0.7 is a fresh install: everyone needs the new version, and hosts need to share their new (longer) room codes. Old saved rooms are cleared.
+
+## Friends
+
+Friends stay off until you first choose a status other than Offline. Then click **Friends**, copy your friend code and send it to someone. When they paste it, you get a request, and neither of you can message or see the other's status until you accept.
+
+Your encryption key is your account, so a new IP address doesn't end a friendship. Friends who are online get your new address automatically. If both addresses change while you're apart, either of you pastes the other's current code and you carry on. Messages travel directly between your PCs and wait, encrypted, on the sender's PC until you're both online.
+
+Without a server, friends can't always connect: at least one side's router has to accept incoming connections, so two people behind CGNAT may not reach each other. Use **Backup and restore** in the Friends window to keep your account safe, because nothing else can recover it after a Windows reinstall.
 
 ## Text chat
 
