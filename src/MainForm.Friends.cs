@@ -27,22 +27,22 @@ namespace Maela
         private bool _callHosting;
         private bool _callVoiceJoined;
         private bool _callHadCompany;
+        private bool _callRingingOut;
+        private DateTime _nextRingbackUtc = DateTime.MinValue;
         private DateTime _callRoomStageUtc = DateTime.MinValue;
         private IncomingCallForm _incomingCall;
         private readonly System.Windows.Forms.Timer _friendAddressTimer = new System.Windows.Forms.Timer();
 
-        /// <summary>Friends fill the window, like a room does. The rail switches between them.</summary>
+        /// <summary>
+        /// Friends take the place of the channels in the sidebar, and the chat takes the main area.
+        /// The room card and your name bar stay. Panels only hide and show: their order sets how
+        /// they dock, so don't reorder them here.
+        /// </summary>
         internal void ShowFriendsView()
         {
             if (_friendsView == null)
                 return;
-            _sidebar.Visible = false;
-            _main.Visible = false;
-            _friendsView.Visible = true;
-            _friendsView.BringToFront();
-            _rail.BringToFront();
-            _rail.FriendsSelected = true;
-            _rail.Invalidate();
+            SetFriendsVisible(true);
             if (_callFriendId != null && _callRoomStageUtc != DateTime.MinValue)
                 _friendsView.ShowCallInProgress();
             if (_friendAddressChanged)
@@ -52,13 +52,31 @@ namespace Maela
 
         internal void ShowRoomsView()
         {
-            if (_friendsView == null || !_friendsView.Visible)
+            if (_friendsView == null || !_rail.FriendsSelected)
                 return;
-            _friendsView.Visible = false;
-            _sidebar.Visible = true;
-            _main.Visible = true;
-            _rail.FriendsSelected = false;
+            SetFriendsVisible(false);
+        }
+
+        private void SetFriendsVisible(bool friends)
+        {
+            _main.Visible = !friends;
+            _friendsView.Visible = friends;
+            _friendsView.ListPanel.Visible = friends;
+            _rail.FriendsSelected = friends;
             _rail.Invalidate();
+            UpdateSidebarParts();
+        }
+
+        /// <summary>The room header, channels and room card only show while you're in or hosting a room.</summary>
+        private void UpdateSidebarParts()
+        {
+            VoipEngine engine = _engine;
+            bool inRoom = engine != null && engine.IsRunning;
+            bool showChannels = inRoom && !_rail.FriendsSelected;
+            _roomHeader.Visible = showChannels;
+            _channelHead.Visible = showChannels;
+            _channelPad.Visible = showChannels;
+            _cardHost.Visible = inRoom;
         }
 
         private void AddStatusItems(ToolStripItemCollection items)
@@ -107,12 +125,29 @@ namespace Maela
             _friendsView = new FriendsView(_friends);
             _friendsView.ChangeStatus = SetMyStatus;
             _friendsView.Call = StartFriendCall;
-            _friendsView.BuildStatusMenu = AddStatusItems;
             _friendsView.ReturnToCall = ShowRoomsView;
             _friendsView.Dock = DockStyle.Fill;
             _friendsView.Visible = false;
             Controls.Add(_friendsView);
-            Controls.SetChildIndex(_friendsView, Controls.Count - 1);
+            Controls.SetChildIndex(_friendsView, 0); // Docks last, in the space the rail and sidebar leave.
+            _friendsView.PeopleChanged += delegate(List<FriendInfo> people)
+            {
+                _rail.SelectedFriendId = _friendsView.SelectedId;
+                _rail.SetFriends(people);
+            };
+            _rail.FriendClicked += delegate(string id)
+            {
+                _friendsView.SelectPerson(id);
+                _rail.SelectedFriendId = id;
+                _rail.Invalidate();
+            };
+            _rail.FriendMenuRequested += delegate(string id, Point at) { _friendsView.ShowPersonMenu(id, _rail, at); };
+            _rail.AddFriendClicked += delegate { _friendsView.AddFriend(); };
+            _friendsView.RefreshNow();
+            _friendsView.ListPanel.Dock = DockStyle.Fill;
+            _friendsView.ListPanel.Visible = false;
+            _sidebar.Controls.Add(_friendsView.ListPanel);
+            _sidebar.Controls.SetChildIndex(_friendsView.ListPanel, 0); // Fills what the card and name bar leave.
             _friends.MessageReceived += delegate(string id, string text) { OnFriendEvent(delegate { FriendMessageArrived(id); }); };
             _friends.RequestReceived += delegate(string id, string name) { OnFriendEvent(delegate { ShowFriendRequest(id, name); }); };
             _friends.RequestAccepted += delegate(string name) { OnFriendEvent(delegate { FriendAlert(name + " accepted your friend request"); }); };
@@ -309,7 +344,7 @@ namespace Maela
             {
                 _friendAddressChanged = true;
                 FriendAlert("Your address changed. Friends who were offline may need your new code.");
-                if (_friendsView != null && _friendsView.Visible)
+                if (_friendsView != null && _rail.FriendsSelected)
                 {
                     _friendsView.ShowAddressChanged();
                     _friendAddressChanged = false;
@@ -448,6 +483,8 @@ namespace Maela
             }
             _callFriendId = id;
             ResetCallProgress();
+            _callRingingOut = true;
+            _nextRingbackUtc = DateTime.MinValue;
             ShowTrayOrFlash("Calling " + FriendName(id) + "\u2026");
         }
 
@@ -458,6 +495,7 @@ namespace Maela
             _callHosting = false;
             _callVoiceJoined = false;
             _callHadCompany = false;
+            _callRingingOut = false;
             _callRoomStageUtc = DateTime.MinValue;
         }
 
@@ -492,7 +530,7 @@ namespace Maela
                         ResetCallProgress();
                         _friends.AcceptCall(_friendMapping != null);
                     };
-                    _incomingCall.Ring += delegate { PlaySound(SoundCue.Message); };
+                    _incomingCall.Ring += delegate { PlaySound(SoundCue.Ring); };
                     if (!Visible)
                         ShowTrayTip("m\u00E6la", FriendName(id) + " is calling");
                     FlashForAttention();
@@ -555,6 +593,11 @@ namespace Maela
         {
             if (_callFriendId == null)
                 return;
+            if (_callRingingOut && _callRoomStageUtc == DateTime.MinValue && DateTime.UtcNow >= _nextRingbackUtc)
+            {
+                _nextRingbackUtc = DateTime.UtcNow.AddSeconds(4);
+                PlaySound(SoundCue.Ringback);
+            }
             VoipEngine engine = _engine;
             if (_callHosting && !_callRoomSent && engine != null && engine.IsRunning && RoomCode.IsValid(_activeInvite))
             {
@@ -634,7 +677,6 @@ namespace Maela
         private readonly FriendService _friends;
         private readonly Panel _left = new Panel();
         private readonly Panel _right = new Panel();
-        private readonly ListBox _list = new ListBox();
         private readonly FlatButton _codeButton = new FlatButton();
         private readonly FlatButton _addButton = new FlatButton();
         private readonly Label _title = new Label();
@@ -664,10 +706,16 @@ namespace Maela
         /// <summary>Goes through the app, which also opens and closes the router port.</summary>
         public Action<FriendStatus> ChangeStatus;
         public Action<string> Call;
-        public Action<ToolStripItemCollection> BuildStatusMenu;
         public Action ReturnToCall;
-        private readonly FlatButton _statusButton = new FlatButton();
         private bool _callInProgress;
+
+        /// <summary>Everyone, in order, whenever anything about them changes. The rail shows them.</summary>
+        public event Action<List<FriendInfo>> PeopleChanged;
+
+        public string SelectedId { get { return _selectedId; } }
+
+        /// <summary>Your friend code and backup buttons, which the app shows in its sidebar.</summary>
+        public Control ListPanel { get { return _left; } }
         private readonly FlatButton _callButton = new FlatButton();
 
         public FriendsView(FriendService friends)
@@ -707,32 +755,7 @@ namespace Maela
             leftTop.Controls.Add(_backupButton);
             leftTop.Controls.Add(_codeButton);
             leftTop.Controls.Add(_addButton);
-            _list.Dock = DockStyle.Fill;
-            _list.BorderStyle = BorderStyle.None;
-            _list.DrawMode = DrawMode.OwnerDrawFixed;
-            _list.ItemHeight = 52;
-            _list.IntegralHeight = false;
-            _list.DrawItem += DrawPerson;
-            _list.SelectedIndexChanged += delegate { SelectionChanged(); };
-            _list.MouseDown += ListMouseDown;
-            _left.Controls.Add(_list);
             _left.Controls.Add(leftTop);
-            Panel statusRow = new Panel();
-            statusRow.Dock = DockStyle.Bottom;
-            statusRow.Height = 46;
-            _statusButton.Look = ButtonLook.Secondary;
-            _statusButton.SetBounds(12, 4, 246, 36);
-            _statusButton.Click += delegate
-            {
-                if (BuildStatusMenu == null)
-                    return;
-                ContextMenuStrip menu = new ContextMenuStrip();
-                menu.Renderer = new ThemedMenuRenderer();
-                BuildStatusMenu(menu.Items);
-                menu.Show(_statusButton, new Point(0, -menu.PreferredSize.Height));
-            };
-            statusRow.Controls.Add(_statusButton);
-            _left.Controls.Add(statusRow);
 
             Panel head = new Panel();
             head.Dock = DockStyle.Top;
@@ -902,8 +925,6 @@ namespace Maela
             _left.BackColor = t.Side;
             foreach (Control c in _left.Controls)
                 c.BackColor = t.Side;
-            _list.BackColor = t.Side;
-            _list.ForeColor = t.Text;
             _right.BackColor = t.Main;
             foreach (Control c in _right.Controls)
                 c.BackColor = t.Main;
@@ -1065,7 +1086,7 @@ namespace Maela
             RefreshAll(true);
         }
 
-        private void AddFriend()
+        public void AddFriend()
         {
             string code = TextPrompt.Show(this, "Add a friend", "Their friend code", String.Empty);
             if (String.IsNullOrWhiteSpace(code))
@@ -1108,15 +1129,11 @@ namespace Maela
                 _input.Box.Clear();
         }
 
-        private void ListMouseDown(object sender, MouseEventArgs e)
+        public void ShowPersonMenu(string id, Control anchor, Point at)
         {
-            if (e.Button != MouseButtons.Right)
+            FriendInfo person = _friends.GetPeople().Find(delegate(FriendInfo p) { return p.Id == id; });
+            if (person == null)
                 return;
-            int index = _list.IndexFromPoint(e.Location);
-            if (index < 0)
-                return;
-            _list.SelectedIndex = index;
-            FriendInfo person = (FriendInfo)_list.Items[index];
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Renderer = new ThemedMenuRenderer();
             if (person.State != FriendState.Blocked)
@@ -1133,7 +1150,7 @@ namespace Maela
                 if (MessageBox.Show(this, question, "Remove", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     _friends.Remove(person.Id);
             });
-            menu.Show(_list, e.Location);
+            menu.Show(anchor, at);
         }
 
         private static int Rank(FriendInfo person)
@@ -1147,12 +1164,25 @@ namespace Maela
             }
         }
 
+        public void RefreshNow()
+        {
+            RefreshAll(true);
+        }
+
+        public void SelectPerson(string id)
+        {
+            _selectedId = id;
+            _friends.MarkRead(id);
+            RefreshAll(true);
+            if (_input.Visible)
+                _input.Box.Focus(); // So messages count as read while you're here.
+        }
+
         private void RefreshAll(bool force)
         {
             if (!force && _friends.Version == _versionShown)
                 return;
             _versionShown = _friends.Version;
-            _statusButton.Text = "\u25CF  " + MainForm.StatusLabel(_friends.Status);
 
             List<FriendInfo> people = _friends.GetPeople();
             people.Sort(delegate(FriendInfo a, FriendInfo b)
@@ -1160,32 +1190,11 @@ namespace Maela
                 int rank = Rank(a).CompareTo(Rank(b));
                 return rank != 0 ? rank : String.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
             });
-            string keep = _selectedId;
-            _list.BeginUpdate();
-            _list.Items.Clear();
-            FriendInfo selected = null;
-            foreach (FriendInfo person in people)
-            {
-                _list.Items.Add(person);
-                if (person.Id == keep)
-                {
-                    selected = person;
-                    _list.SelectedItem = person;
-                }
-            }
-            _list.EndUpdate();
+            FriendInfo selected = people.Find(delegate(FriendInfo p) { return p.Id == _selectedId; });
             _selectedId = selected == null ? null : selected.Id;
+            if (PeopleChanged != null)
+                PeopleChanged(people);
             ShowPerson(selected);
-        }
-
-        private void SelectionChanged()
-        {
-            FriendInfo person = _list.SelectedItem as FriendInfo;
-            string id = person == null ? null : person.Id;
-            if (id == _selectedId)
-                return;
-            _selectedId = id;
-            ShowPerson(person);
         }
 
         private void ShowPerson(FriendInfo person)
@@ -1203,7 +1212,7 @@ namespace Maela
             _updateCodeButton.Visible = longUnreachable;
             _callButton.Visible = isFriend && !longUnreachable && person.Status != FriendStatus.Offline;
             _title.Text = person == null ? "Friends" : person.Name;
-            _subtitle.Text = person == null ? "Click a friend to open your chat with them." : Describe(person) + "  ·  ID " + person.ShortId;
+            _subtitle.Text = person == null ? "Click a friend on the far left to open your chat." : Describe(person) + "  ·  ID " + person.ShortId;
             RefreshNotice(person);
 
             if (!isFriend)
@@ -1266,44 +1275,6 @@ namespace Maela
                 default: return MainForm.StatusLabel(person.Status);
             }
         }
-
-        private void DrawPerson(object sender, DrawItemEventArgs e)
-        {
-            if (e.Index < 0 || e.Index >= _list.Items.Count)
-                return;
-            FriendInfo person = (FriendInfo)_list.Items[e.Index];
-            Theme t = Theme.Current;
-            bool selected = (e.State & DrawItemState.Selected) != 0;
-            Graphics g = e.Graphics;
-            using (SolidBrush back = new SolidBrush(t.Side))
-                g.FillRectangle(back, e.Bounds);
-            Rectangle row = new Rectangle(e.Bounds.X + 8, e.Bounds.Y + 2, e.Bounds.Width - 16, e.Bounds.Height - 4);
-            if (selected)
-                Ui.FillRound(g, t.AccentSoftSide, row, 8);
-            Ui.DrawAvatar(g, new Rectangle(row.X + 8, row.Y + 7, 34, 34), person.Name, false, selected ? t.AccentSoftSide : t.Side);
-
-            Color dot;
-            switch (person.Status)
-            {
-                case FriendStatus.Online: dot = t.Good; break;
-                case FriendStatus.Away: dot = Color.FromArgb(240, 178, 50); break;
-                case FriendStatus.Busy: dot = t.Danger; break;
-                default: dot = t.Muted; break;
-            }
-            if (person.State == FriendState.Friend)
-                Ui.FillRound(g, dot, new RectangleF(row.X + 32, row.Y + 31, 10, 10), 5);
-
-            int textWidth = row.Width - 60 - (person.Unread > 0 ? 30 : 0);
-            Ui.DrawText(g, person.Name, Ui.SmallBold, new Rectangle(row.X + 50, row.Y + 7, textWidth, 18), t.Text, TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
-            Ui.DrawText(g, Describe(person), Ui.Small, new Rectangle(row.X + 50, row.Y + 25, textWidth, 16), t.Muted, TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
-            if (person.Unread > 0 || person.State == FriendState.RequestReceived)
-            {
-                Rectangle badge = new Rectangle(row.Right - 30, row.Y + 14, 22, 20);
-                Ui.FillRound(g, t.Accent, badge, 10);
-                string count = person.State == FriendState.RequestReceived ? "!" : (person.Unread > 99 ? "99" : person.Unread.ToString());
-                Ui.DrawText(g, count, Ui.SmallBold, badge, t.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            }
-        }
     }
 
     /// <summary>Asks for the backup password, twice when it's a new one.</summary>
@@ -1363,7 +1334,7 @@ namespace Maela
             CancelButton = null;
             AcceptButton = null; // A stray Enter mustn't answer a call.
             FormClosing += delegate { Finish(false); };
-            _ring.Interval = 2000;
+            _ring.Interval = 3000;
             _ring.Tick += delegate { if (Ring != null) Ring(this, EventArgs.Empty); };
             Shown += delegate
             {

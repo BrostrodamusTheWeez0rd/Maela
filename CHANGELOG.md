@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.2 - Friends in the room row and call sounds
+
+- **Fixed the broken layout from 0.11.1.** Opening Friends could put the room list on top of it, or
+  move the room list to the wrong side of the window.
+- **Friends swap in for your rooms.** A labelled button at the top left replaces the room tiles with
+  your friends in the same row, and clicking one opens your chat. The labels swap too, so the heading
+  always says where you are. The room card and your name bar stay put.
+- **Calls sound like calls.** A proper ring when someone calls you, and a soft tone while you wait
+  for them to answer.
+- **Easier to spot new messages.** The Friends button lights up and shows a count when a friend
+  messages you or sends a request.
+- **Status moved to your profile.** Click your name to choose Online, Away, Busy or Offline.
+
 ## 0.11.1 - Friends view and easier requests
 
 - **Friends get their own view.** The mæla icon at the top of the room list opens Friends in the

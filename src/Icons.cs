@@ -7,7 +7,7 @@ namespace Maela
     internal enum IconKind
     {
         None, Mic, MicOff, Headphones, HeadphonesOff, Gear, Plus, Send, Smile, Copy, Leave, Lock,
-        Search, Speaker, Close, Hash, Check, Waves, WavesOff, Signal, Download, Palette, Crown, Disconnect, Screen
+        Search, Speaker, Close, Hash, Check, Waves, WavesOff, Signal, Download, Palette, Crown, Disconnect, Screen, Friends
     }
 
     /// <summary>
@@ -34,6 +34,12 @@ namespace Maela
                 pen.LineJoin = LineJoin.Round;
                 switch (kind)
                 {
+                    case IconKind.Friends:
+                        g.FillEllipse(brush, 14.5f, 6f, 6.5f, 6.5f);
+                        g.FillPie(brush, 13.5f, 14f, 9.5f, 11f, 180, 180);
+                        g.FillEllipse(brush, 4.5f, 4f, 8.5f, 8.5f);
+                        g.FillPie(brush, 2f, 14f, 13.5f, 13f, 180, 180);
+                        break;
                     case IconKind.Mic:
                         FillRound(g, brush, 9, 3, 6, 12, 3);
                         g.DrawArc(pen, 5, 4, 14, 14, 0, 180);

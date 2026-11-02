@@ -117,7 +117,14 @@ namespace Maela
             else
                 state = "In the room";
 
-            ProfileCard card = new ProfileCard(member, member.IsLocal ? MyPicture() : AvatarImage(member.Id), status, state, engine, member.IsLocal);
+            FriendStatus? myStatus = member.IsLocal && _friends != null ? _friends.Status : (FriendStatus?)null;
+            ProfileCard card = new ProfileCard(member, member.IsLocal ? MyPicture() : AvatarImage(member.Id), status, state, engine, member.IsLocal, myStatus);
+            card.StatusChosen += delegate(FriendStatus chosen)
+            {
+                card.Close();
+                SetMyStatus(chosen);
+                RefreshShell(_engine);
+            };
             card.EditProfileClicked += delegate { card.Close(); ShowEditProfile(); };
             card.MoveClicked += delegate(int channelId) { if (_engine != null) _engine.MoveMemberToChannel(member.Id, channelId); };
             card.KickClicked += delegate(bool ban)
@@ -217,6 +224,7 @@ namespace Maela
     internal sealed class ProfileCard : Form
     {
         public event EventHandler EditProfileClicked;
+        public event Action<FriendStatus> StatusChosen;
         public event Action<int> MoveClicked;
         public event Action<bool> KickClicked;
         public event EventHandler WatchClicked;
@@ -231,7 +239,7 @@ namespace Maela
         private readonly Label _volumeValue = new Label();
         private bool _closing;
 
-        public ProfileCard(RoomMemberInfo member, Image picture, string status, string state, VoipEngine engine, bool isLocal)
+        public ProfileCard(RoomMemberInfo member, Image picture, string status, string state, VoipEngine engine, bool isLocal, FriendStatus? myStatus)
         {
             _member = member;
             _picture = picture;
@@ -248,6 +256,31 @@ namespace Maela
 
             int width = 300;
             int y = 158 + (_status.Length > 0 ? 22 : 0);
+
+            if (isLocal && myStatus.HasValue)
+            {
+                Label caption = new Label();
+                caption.AutoSize = true;
+                caption.Font = Ui.SmallBold;
+                caption.ForeColor = Theme.Current.Text2;
+                caption.Text = "Appear as";
+                caption.Location = new Point(16, y);
+                Controls.Add(caption);
+                y += 22;
+                FriendStatus[] choices = { FriendStatus.Online, FriendStatus.Away, FriendStatus.Busy, FriendStatus.Offline };
+                int i;
+                for (i = 0; i < choices.Length; i++)
+                {
+                    FriendStatus choice = choices[i];
+                    FlatButton option = SmallButton(MainForm.StatusLabel(choice), choice == myStatus.Value ? ButtonLook.Soft : ButtonLook.Secondary, 16 + i * 68, y, 64);
+                    option.Click += delegate
+                    {
+                        if (choice != myStatus.Value && StatusChosen != null)
+                            StatusChosen(choice);
+                    };
+                }
+                y += 44;
+            }
 
             if (isLocal)
             {

@@ -210,16 +210,18 @@ namespace Maela
         private const int TopPad = 12;
         private readonly ToolTip _tip = new ToolTip();
         private List<SavedRoom> _rooms = new List<SavedRoom>();
+        private List<FriendInfo> _friends = new List<FriendInfo>();
+        private bool _friendsSelected;
         private int _hover = -2;
         private int _scroll;
         private string _tipFor = String.Empty;
-        private Image _mark;
+        private const int CaptionHeight = 20;
+        private const int RoomsTop = TopPad + Tile + CaptionHeight + 12 + CaptionHeight;
 
         public RoomRail()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             Width = 72;
-            try { _mark = Branding.LoadBrandMark(); } catch { }
         }
 
         public SavedRoom Selected { get; set; }
@@ -227,8 +229,31 @@ namespace Maela
         /// <summary>Returns true if a room is live (hosted by us right now or seen online).</summary>
         public Func<SavedRoom, bool> IsLive { get; set; }
 
-        /// <summary>True while the Friends view is showing, so no room looks selected.</summary>
-        public bool FriendsSelected { get; set; }
+        /// <summary>True while friends' tiles are in the row instead of rooms.</summary>
+        public bool FriendsSelected
+        {
+            get { return _friendsSelected; }
+            set
+            {
+                if (_friendsSelected != value)
+                    _scroll = 0;
+                _friendsSelected = value;
+            }
+        }
+
+        public string SelectedFriendId { get; set; }
+
+        private int Count { get { return _friendsSelected ? _friends.Count : _rooms.Count; } }
+
+        public event Action<string> FriendClicked;
+        public event Action<string, Point> FriendMenuRequested;
+        public event EventHandler AddFriendClicked;
+
+        public void SetFriends(IList<FriendInfo> friends)
+        {
+            _friends = new List<FriendInfo>(friends);
+            Invalidate();
+        }
 
         /// <summary>Unread messages and requests, shown on the Friends button.</summary>
         public int FriendsBadge { get; set; }
@@ -246,15 +271,15 @@ namespace Maela
 
         private Rectangle TileRect(int index)
         {
-            // index -1 = brand mark, 0..n-1 = rooms, n = add button.
-            int y = TopPad + (index + 1) * (Tile + Gap) + (index >= 0 ? 12 : 0) - _scroll;
+            // index -1 = Friends, 0..n-1 = rooms, n = add button.
+            int y = (index < 0 ? TopPad : RoomsTop + index * (Tile + Gap)) - _scroll;
             return new Rectangle((Width - Tile) / 2, y, Tile, Tile);
         }
 
         private int HitTest(Point p)
         {
             int i;
-            for (i = -1; i <= _rooms.Count; i++)
+            for (i = -1; i <= Count; i++)
             {
                 if (TileRect(i).Contains(p))
                     return i;
@@ -269,7 +294,9 @@ namespace Maela
             {
                 _hover = hit;
                 Invalidate();
-                string tip = hit == -1 ? "Friends" : (hit >= 0 && hit < _rooms.Count ? _rooms[hit].Name : (hit == _rooms.Count ? "Host or join a room" : String.Empty));
+                string tip = hit == -1 ? (FriendsSelected ? "Back to rooms" : "Friends")
+                    : (hit >= 0 && hit < Count ? (FriendsSelected ? _friends[hit].Name : _rooms[hit].Name)
+                    : (hit == Count ? (FriendsSelected ? "Add a friend" : "Host or join a room") : String.Empty));
                 if (tip != _tipFor)
                 {
                     _tipFor = tip;
@@ -289,7 +316,7 @@ namespace Maela
 
         protected override void OnMouseWheel(MouseEventArgs e)
         {
-            int content = TileRect(_rooms.Count).Bottom + _scroll + 12;
+            int content = TileRect(Count).Bottom + _scroll + 12;
             _scroll = Math.Max(0, Math.Min(Math.Max(0, content - Height), _scroll - e.Delta / 3));
             Invalidate();
             base.OnMouseWheel(e);
@@ -303,7 +330,20 @@ namespace Maela
                 if (e.Button == MouseButtons.Left && FriendsClicked != null)
                     FriendsClicked(this, EventArgs.Empty);
             }
-            else if (hit >= 0 && hit < _rooms.Count)
+            else if (FriendsSelected && hit >= 0 && hit < Count)
+            {
+                if (e.Button == MouseButtons.Right)
+                {
+                    if (FriendMenuRequested != null) FriendMenuRequested(_friends[hit].Id, e.Location);
+                }
+                else if (FriendClicked != null)
+                    FriendClicked(_friends[hit].Id);
+            }
+            else if (FriendsSelected && hit == Count)
+            {
+                if (AddFriendClicked != null) AddFriendClicked(this, EventArgs.Empty);
+            }
+            else if (hit >= 0 && hit < Count)
             {
                 if (e.Button == MouseButtons.Right)
                 {
@@ -312,7 +352,7 @@ namespace Maela
                 else if (RoomClicked != null)
                     RoomClicked(_rooms[hit]);
             }
-            else if (hit == _rooms.Count && AddClicked != null)
+            else if (hit == Count && AddClicked != null)
                 AddClicked(new Point(TileRect(hit).Right + 6, TileRect(hit).Top));
             base.OnMouseUp(e);
         }
@@ -323,18 +363,19 @@ namespace Maela
             Graphics g = e.Graphics;
             g.Clear(t.Rail);
 
+            // The heading above the row says where you are; the top button goes to the other place.
             Rectangle mark = TileRect(-1);
-            if (_mark != null)
-            {
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(_mark, mark);
-            }
-            if (FriendsSelected || _hover == -1)
-            {
-                int h = FriendsSelected ? 36 : 18;
-                Ui.FillRound(g, t.Text, new RectangleF(-4, mark.Top + (Tile - h) / 2f, 8, h), 4);
-            }
-            if (FriendsBadge > 0)
+            string current = FriendsSelected ? "Friends" : "Rooms";
+            string other = FriendsSelected ? "Rooms" : "Friends";
+            Color topTile = _hover == -1 ? t.Surface2 : t.Surface;
+            if (FriendsBadge > 0 && !FriendsSelected)
+                topTile = Ui.Mix(topTile, t.Accent, 0.45f); // Something's waiting: stands out before you read the number.
+            Ui.FillRound(g, topTile, mark, _hover == -1 ? 15 : 18);
+            Icons.Draw(g, FriendsSelected ? IconKind.Hash : IconKind.Friends, new RectangleF(mark.X + 10, mark.Y + 10, 26, 26), t.Text);
+            Ui.DrawText(g, other, Ui.Small, new Rectangle(0, mark.Bottom + 2, Width, CaptionHeight - 2), t.Text2, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            if (_hover == -1)
+                Ui.FillRound(g, t.Text, new RectangleF(-4, mark.Top + (Tile - 18) / 2f, 8, 18), 4);
+            if (FriendsBadge > 0 && !FriendsSelected)
             {
                 Rectangle badge = new Rectangle(mark.Right - 16, mark.Bottom - 16, 22, 20);
                 Ui.FillRound(g, t.Rail, new RectangleF(badge.X - 2, badge.Y - 2, badge.Width + 4, badge.Height + 4), 12);
@@ -342,10 +383,13 @@ namespace Maela
                 Ui.DrawText(g, FriendsBadge > 99 ? "99" : FriendsBadge.ToString(), Ui.SmallBold, badge, t.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             using (SolidBrush sep = new SolidBrush(t.Line))
-                g.FillRectangle(sep, (Width - 30) / 2, mark.Bottom + 10, 30, 2);
+                g.FillRectangle(sep, (Width - 30) / 2, mark.Bottom + CaptionHeight + 5, 30, 2);
+            Ui.DrawText(g, current, Ui.SmallBold, new Rectangle(0, mark.Bottom + CaptionHeight + 10, Width, CaptionHeight - 2), t.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 
             int i;
-            for (i = 0; i < _rooms.Count; i++)
+            if (FriendsSelected)
+                PaintFriends(g, t);
+            for (i = 0; !FriendsSelected && i < Count; i++)
             {
                 SavedRoom room = _rooms[i];
                 Rectangle r = TileRect(i);
@@ -375,12 +419,49 @@ namespace Maela
                 }
             }
 
-            Rectangle add = TileRect(_rooms.Count);
-            if (_hover == _rooms.Count)
+            Rectangle add = TileRect(Count);
+            if (_hover == Count)
                 Ui.FillRound(g, t.Accent, add, 15);
             else
                 Ui.StrokeRound(g, t.Line, new RectangleF(add.X + 0.5f, add.Y + 0.5f, add.Width - 1, add.Height - 1), 18, 1.5f);
-            Icons.Draw(g, IconKind.Plus, new RectangleF(add.X + 13, add.Y + 13, 20, 20), _hover == _rooms.Count ? Color.White : t.Accent2);
+            Icons.Draw(g, IconKind.Plus, new RectangleF(add.X + 13, add.Y + 13, 20, 20), _hover == Count ? Color.White : t.Accent2);
+        }
+
+        private void PaintFriends(Graphics g, Theme t)
+        {
+            int i;
+            for (i = 0; i < Count; i++)
+            {
+                FriendInfo person = _friends[i];
+                Rectangle r = TileRect(i);
+                if (r.Bottom < 0 || r.Top > Height)
+                    continue;
+                bool selected = person.Id == SelectedFriendId;
+                Ui.DrawAvatar(g, r, person.Name, false, t.Rail);
+                if (selected || _hover == i)
+                {
+                    int h = selected ? 36 : 18;
+                    Ui.FillRound(g, t.Text, new RectangleF(-4, r.Top + (Tile - h) / 2f, 8, h), 4);
+                }
+                if (person.State == FriendState.Friend)
+                {
+                    Color dot = person.Status == FriendStatus.Online ? t.Good
+                        : person.Status == FriendStatus.Away ? Color.FromArgb(240, 178, 50)
+                        : person.Status == FriendStatus.Busy ? t.Danger : t.Muted;
+                    using (SolidBrush ring = new SolidBrush(t.Rail))
+                        g.FillEllipse(ring, r.Right - 12, r.Bottom - 12, 18, 18);
+                    using (SolidBrush fill = new SolidBrush(dot))
+                        g.FillEllipse(fill, r.Right - 9, r.Bottom - 9, 12, 12);
+                }
+                string badgeText = person.State == FriendState.RequestReceived ? "!" : (person.Unread > 0 ? (person.Unread > 99 ? "99" : person.Unread.ToString()) : null);
+                if (badgeText != null)
+                {
+                    Rectangle badge = new Rectangle(r.Right - 16, r.Top - 4, 22, 20);
+                    Ui.FillRound(g, t.Rail, new RectangleF(badge.X - 2, badge.Y - 2, badge.Width + 4, badge.Height + 4), 12);
+                    Ui.FillRound(g, t.Accent, badge, 10);
+                    Ui.DrawText(g, badgeText, Ui.SmallBold, badge, t.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+            }
         }
 
         private static string Initials(string name)

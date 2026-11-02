@@ -6,7 +6,7 @@ namespace Maela
 {
     internal enum SoundCue
     {
-        JoinVoice, LeaveVoice, PeerJoined, PeerLeft, Mute, Unmute, Deafen, Undeafen, Message, Connected, Disconnected
+        JoinVoice, LeaveVoice, PeerJoined, PeerLeft, Mute, Unmute, Deafen, Undeafen, Message, Connected, Disconnected, Ring, Ringback
     }
 
     /// <summary>
@@ -70,6 +70,10 @@ namespace Maela
                     return Mix(Small, 0.45, Note(0.00, 698.5, 0.40, 0.65, 0.25), Note(0.03, 1046.5, 0.18, 0.10, 0.0));
                 case SoundCue.Connected:      // Major arpeggio: you're in.
                     return Mix(Big, 0.75, Note(0.00, 392.0, 0.45, 0.65, 0.2), Note(0.08, 493.9, 0.45, 0.7, 0.2), Note(0.16, 587.3, 0.55, 0.8, 0.2));
+                case SoundCue.Ring:           // Someone's calling: a bright two-note phrase, twice.
+                    return Mix(Big, 1.30, Note(0.00, 659.3, 0.30, 0.85, 0.3), Note(0.16, 830.6, 0.34, 0.9, 0.3), Note(0.62, 659.3, 0.30, 0.85, 0.3), Note(0.78, 830.6, 0.45, 0.9, 0.3));
+                case SoundCue.Ringback:       // You're calling: a soft, steady, low tone.
+                    return Mix(Small, 1.20, Steady(0.00, 440.0, 1.20, 0.6), Steady(0.00, 480.0, 1.20, 0.6));
                 case SoundCue.Disconnected:   // Two low falling notes, minor feel.
                     return Mix(Big, 0.60, Note(0.00, 349.2, 0.35, 0.7, 0.1), Note(0.12, 261.6, 0.45, 0.75, 0.1));
             }
@@ -96,6 +100,15 @@ namespace Maela
             n.Level = level;
             n.Overtone = overtone;
             n.DecayRate = 3.2 / duration;
+            return n;
+        }
+
+        /// <summary>A tone that holds instead of fading like a bell.</summary>
+        private static NoteSpec Steady(double start, double frequency, double duration, double level)
+        {
+            NoteSpec n = Note(start, frequency, duration, level, 0.0);
+            n.Attack = 0.05;
+            n.DecayRate = 0.3;
             return n;
         }
 

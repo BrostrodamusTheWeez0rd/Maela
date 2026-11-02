@@ -20,6 +20,8 @@ namespace Maela
 
         private readonly RoomRail _rail = new RoomRail();
         private readonly Panel _sidebar = new Panel();
+        private readonly Panel _channelHead = new Panel();
+        private readonly Panel _channelPad = new Panel();
         private readonly Panel _main = new Panel();
         private readonly SidebarHeader _roomHeader = new SidebarHeader();
         private readonly SectionLabel _channelsLabel = new SectionLabel();
@@ -61,7 +63,13 @@ namespace Maela
             {
                 return (_engine != null && _engine.IsRunning && Object.ReferenceEquals(room, _activeSavedRoom)) || room.Presence == RoomPresence.Online;
             };
-            _rail.FriendsClicked += delegate { ShowFriendsView(); };
+            _rail.FriendsClicked += delegate
+            {
+                if (_rail.FriendsSelected)
+                    ShowRoomsView();
+                else
+                    ShowFriendsView();
+            };
             _rail.RoomClicked += delegate(SavedRoom room)
             {
                 ShowRoomsView();
@@ -134,7 +142,7 @@ namespace Maela
                     _roomMenu.Show(_roomHeader, new Point(16, _roomHeader.Height - 6));
             };
 
-            Panel channelHead = new Panel();
+            Panel channelHead = _channelHead;
             channelHead.Dock = DockStyle.Top;
             channelHead.Height = 42;
             _channelsLabel.Text = "CHANNELS";
@@ -159,7 +167,7 @@ namespace Maela
             _channels.DrawItem += ChannelsDrawItem;
             _channels.MouseDoubleClick += ChannelsDoubleClick;
             _channels.MouseDown += ChannelsMouseDown;
-            Panel channelPad = new Panel();
+            Panel channelPad = _channelPad;
             channelPad.Dock = DockStyle.Fill;
             channelPad.Padding = new Padding(8, 0, 8, 0);
             channelPad.Controls.Add(_channels);
@@ -255,6 +263,7 @@ namespace Maela
 
             _home.Visible = !running;
             _composer.Visible = running;
+            UpdateSidebarParts();
             if (!running)
                 _home.SetRoom(room, room == null ? String.Empty : PresenceText(room));
             _addChannelButton.Visible = running && engine.IsHost;
