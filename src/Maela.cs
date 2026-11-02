@@ -879,6 +879,8 @@ namespace Maela
         public string RoomCircles = String.Empty;
         public string FriendCircles = String.Empty;
         public string FriendCircleOf = String.Empty;
+        public bool LayoutChosen;               // Off: Spatial or Lightweight is picked by whether there's a graphics card.
+        public string WhatsNewSeen = String.Empty; // The last announcement shown after an update.
         public bool NoiseSuppression = true;
         public bool SetupDone;
         public bool SoundEffects = true;
@@ -913,6 +915,8 @@ namespace Maela
             p.RoomCircles = RoomCircles;
             p.FriendCircles = FriendCircles;
             p.FriendCircleOf = FriendCircleOf;
+            p.LayoutChosen = LayoutChosen;
+            p.WhatsNewSeen = WhatsNewSeen;
             p.NoiseSuppression = NoiseSuppression;
             p.SetupDone = SetupDone;
             p.SoundEffects = SoundEffects;
@@ -1004,6 +1008,10 @@ namespace Maela
                         p.FriendCircles = value.Trim();
                     else if (key == "friendcircleof")
                         p.FriendCircleOf = value.Trim();
+                    else if (key == "layoutchosen")
+                        p.LayoutChosen = value.Trim() == "1";
+                    else if (key == "whatsnew")
+                        p.WhatsNewSeen = value.Trim();
                     else if (key == "noise")
                     {
                         p.NoiseSuppression = value != "0";
@@ -1091,6 +1099,8 @@ namespace Maela
                     "roomcircles=" + (p.RoomCircles ?? String.Empty),
                     "friendcircles=" + (p.FriendCircles ?? String.Empty),
                     "friendcircleof=" + (p.FriendCircleOf ?? String.Empty),
+                    "layoutchosen=" + (p.LayoutChosen ? "1" : "0"),
+                    "whatsnew=" + (p.WhatsNewSeen ?? String.Empty),
                     "noise=" + (p.NoiseSuppression ? "1" : "0"),
                     "setup=" + (p.SetupDone ? "1" : "0"),
                     "sfx=" + (p.SoundEffects ? "1" : "0"),

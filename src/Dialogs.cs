@@ -217,6 +217,9 @@ namespace Maela
 
         public bool Selected { get; set; }
 
+        /// <summary>Tagged as the one that suits this PC.</summary>
+        public bool Recommended { get; set; }
+
         protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
 
@@ -235,6 +238,13 @@ namespace Maela
                 else
                     PaintSpatial(g, t, preview);
                 g.ResetClip();
+            }
+            if (Recommended)
+            {
+                Size text = Ui.Measure(g, "Recommended", Ui.Tiny);
+                Rectangle tag = new Rectangle(Width - text.Width - 26, 10, text.Width + 16, 20);
+                Ui.FillRound(g, t.Accent, tag, 10);
+                Ui.DrawText(g, "Recommended", Ui.Tiny, new Point(tag.X + 8, tag.Y + 3), t.OnAccent);
             }
             Color border = Selected ? t.Accent : (_hover ? t.Text2 : t.Line);
             Ui.StrokeRound(g, border, new RectangleF(1, 1, Width - 3, 121), 10, Selected ? 2.5f : 1.2f);
@@ -494,6 +504,69 @@ namespace Maela
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.Clear(Parent != null ? Parent.BackColor : Theme.Current.Main);
+        }
+    }
+
+    /// <summary>
+    /// Shown once, the first time mæla opens after the update that brought Spatial: what changed,
+    /// and a choice of look, with the one picked for this PC already selected.
+    /// </summary>
+    internal sealed class WhatsNewDialog : ThemedDialog
+    {
+        private readonly LayoutCard _spatialCard = new LayoutCard(false);
+        private readonly LayoutCard _lightweightCard = new LayoutCard(true);
+
+        public bool SpatialChosen { get { return _spatialCard.Selected; } }
+
+        public WhatsNewDialog(bool spatial, string graphicsCard) : base("What's new in mæla", 680, 600)
+        {
+            bool hasCard = graphicsCard != null;
+            int width = ClientSize.Width - Margin_X * 2;
+            AddHeading("mæla has a new look", "Meet Spatial, a new way to get around your rooms and friends.");
+
+            AddSection("Spatial");
+            string[] points =
+            {
+                "Your rooms and friends float in their own spaces. Drag to move around, and scroll to zoom.",
+                "Click a room to fly into it. Its channels, and who's in them, spread out around it.",
+                "Chat opens in a panel, and your voice controls stay in the dock at the bottom.",
+                "Drag rooms and friends into circles to sort them, and right-click anything for its options."
+            };
+            foreach (string point in points)
+            {
+                AddText("•  " + point, Theme.Current.Text2, width);
+                Cursor_Y -= 2; // Keeps the list together.
+            }
+
+            AddSection("Choose your look");
+            _spatialCard.Location = new Point(Margin_X, Cursor_Y);
+            _lightweightCard.Location = new Point(Margin_X + width - _lightweightCard.Width, Cursor_Y);
+            _spatialCard.Selected = spatial;
+            _lightweightCard.Selected = !spatial;
+            _spatialCard.Recommended = hasCard;
+            _lightweightCard.Recommended = !hasCard;
+            _spatialCard.Click += CardClicked;
+            _lightweightCard.Click += CardClicked;
+            Controls.Add(_spatialCard);
+            Controls.Add(_lightweightCard);
+            Cursor_Y += _spatialCard.Height + 8;
+            string card = String.IsNullOrEmpty(graphicsCard) ? "graphics card" : graphicsCard;
+            AddText(hasCard
+                ? "Spatial is recommended for this PC: your " + card + " can run it smoothly. Lightweight is the window you already know, and you can switch between the two at any time in Settings, under Themes."
+                : "Lightweight is recommended for this PC: mæla couldn't find a graphics card, and Lightweight runs well anywhere. You can still try Spatial, but it may feel slow.", Theme.Current.Muted, width);
+            AddText("There are also nine colours to choose from in Settings, and mæla's icons take your colour too.", Theme.Current.Muted, width);
+
+            // Fit the window to what's in it, then put the button underneath.
+            ClientSize = new Size(ClientSize.Width, Cursor_Y + 80);
+            AddButtons(null, Button("Start using mæla", DialogResult.OK));
+        }
+
+        private void CardClicked(object sender, EventArgs e)
+        {
+            _spatialCard.Selected = Object.ReferenceEquals(sender, _spatialCard);
+            _lightweightCard.Selected = !_spatialCard.Selected;
+            _spatialCard.Invalidate();
+            _lightweightCard.Invalidate();
         }
     }
 
@@ -822,6 +895,7 @@ namespace Maela
         private void LayoutCardClicked(object sender, EventArgs e)
         {
             _preferences.ClassicLayout = Object.ReferenceEquals(sender, _classicCard);
+            _preferences.LayoutChosen = true; // From now on, theirs to keep.
             _spatialCard.Selected = !_preferences.ClassicLayout;
             _classicCard.Selected = _preferences.ClassicLayout;
             _spatialCard.Invalidate();

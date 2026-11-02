@@ -558,4 +558,80 @@ namespace Maela
         [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
         [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr obj);
     }
+
+    /// <summary>
+    /// Whether this PC has a real graphics card, built in or separate, rather than only Windows'
+    /// software stand-in (the Microsoft Basic Render Driver). Spatial needs one to run smoothly.
+    /// </summary>
+    internal static class GraphicsCheck
+    {
+        private const int MicrosoftVendor = 0x1414;
+        private const uint SoftwareAdapter = 2; // DXGI_ADAPTER_FLAG_SOFTWARE
+        private static Guid IID_IDXGIFactory1 = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int EnumFn(IntPtr self, uint index, out IntPtr result);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int GetDescFn(IntPtr self, IntPtr desc);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate uint ReleaseFn(IntPtr self);
+
+        [DllImport("dxgi.dll")] private static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr factory);
+
+        public static bool HasGraphicsCard()
+        {
+            string ignored;
+            return HasGraphicsCard(out ignored);
+        }
+
+        /// <summary>As above, also giving the card's name, such as "AMD Radeon RX 7800 XT".</summary>
+        public static bool HasGraphicsCard(out string name)
+        {
+            name = null;
+            IntPtr factory;
+            try
+            {
+                if (CreateDXGIFactory1(ref IID_IDXGIFactory1, out factory) != 0)
+                    return false;
+            }
+            catch
+            {
+                return false; // No DXGI at all: certainly no usable graphics card.
+            }
+            try
+            {
+                for (uint a = 0; ; a++)
+                {
+                    IntPtr adapter;
+                    if (OpenH264Pack.Slot<EnumFn>(factory, 12)(factory, a, out adapter) != 0)
+                        break; // EnumAdapters1: no more.
+                    IntPtr desc = Marshal.AllocHGlobal(512);
+                    try
+                    {
+                        // GetDesc1. The flags sit after three size_t memory counts and the adapter's id.
+                        if (OpenH264Pack.Slot<GetDescFn>(adapter, 10)(adapter, desc) != 0)
+                            continue;
+                        int vendor = Marshal.ReadInt32(desc, 256);
+                        uint flags = (uint)Marshal.ReadInt32(desc, IntPtr.Size == 8 ? 304 : 292);
+                        if (vendor != MicrosoftVendor && (flags & SoftwareAdapter) == 0)
+                        {
+                            name = (Marshal.PtrToStringUni(desc) ?? String.Empty).Trim();
+                            return true;
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(desc);
+                        OpenH264Pack.Slot<ReleaseFn>(adapter, 2)(adapter);
+                    }
+                }
+            }
+            catch
+            {
+                // Can't tell: treat it as no graphics card, so the layout that runs anywhere is picked.
+            }
+            finally
+            {
+                OpenH264Pack.Slot<ReleaseFn>(factory, 2)(factory);
+            }
+            return false;
+        }
+    }
 }

@@ -27,6 +27,69 @@ namespace Maela
 
         private bool AppFocused { get { return SpatialMode ? SpatialTest.WindowActive : ContainsFocus; } }
 
+        private bool _graphicsChecked;
+        private string _graphicsCard; // The graphics card's name, or null if there isn't one.
+
+        private string GraphicsCard
+        {
+            get
+            {
+                if (!_graphicsChecked)
+                {
+                    _graphicsChecked = true;
+                    string name;
+                    _graphicsCard = GraphicsCheck.HasGraphicsCard(out name) ? (name ?? String.Empty) : null;
+                }
+                return _graphicsCard;
+            }
+        }
+
+        /// <summary>
+        /// Until someone picks a look themselves, Spatial goes to PCs with a graphics card and
+        /// Lightweight to the rest. Checked on every start until then, in case a card is added.
+        /// </summary>
+        private void ChooseLayoutForGraphics()
+        {
+            if (_preferences.LayoutChosen)
+                return;
+            _preferences.ClassicLayout = GraphicsCard == null;
+        }
+
+        private const string WhatsNewId = "spatial"; // Change it to show a new announcement after a later update.
+
+        /// <summary>
+        /// The announcement for this update, once. New installs have just seen setup, so they skip
+        /// it. Whatever look is picked in it counts as their own choice from then on.
+        /// </summary>
+        private void ShowWhatsNewOnce(bool newInstall)
+        {
+            if (_preferences.WhatsNewSeen == WhatsNewId)
+                return;
+            _preferences.WhatsNewSeen = WhatsNewId;
+            PreferencesStore.Save(_preferences);
+            if (newInstall)
+                return;
+            // Give the Spatial window a moment to open, so this appears over it rather than behind.
+            System.Windows.Forms.Timer wait = new System.Windows.Forms.Timer();
+            wait.Interval = 1200;
+            wait.Tick += delegate
+            {
+                wait.Stop();
+                wait.Dispose();
+                bool spatial;
+                using (WhatsNewDialog announcement = new WhatsNewDialog(!_preferences.ClassicLayout, GraphicsCard))
+                {
+                    announcement.ShowDialog(this);
+                    spatial = announcement.SpatialChosen;
+                }
+                _preferences.ClassicLayout = !spatial;
+                _preferences.LayoutChosen = true;
+                PreferencesStore.Save(_preferences);
+                ApplyLayoutChoice();
+            };
+            wait.Start();
+        }
+
         protected override void SetVisibleCore(bool value)
         {
             if (value && SpatialMode)
@@ -842,21 +905,122 @@ namespace Maela
             SpatialDialog(delegate { StartFriendCall(id); });
         }
 
-        /// <summary>Someone live in your channel opens their stream; anyone else opens their card.</summary>
-        internal void SpatialPersonClicked(uint id)
+        // ----- Profile cards. Spatial draws them; these give it the details and do what it asks,
+        // through the same calls the Lightweight card uses. -----
+
+        internal void SpatialProfile(uint id)
+        {
+            SpatialDo(delegate
+            {
+                VoipEngine engine = _engine;
+                RoomMemberInfo member = FindMember(id);
+                if (member == null || (engine == null && !member.IsLocal))
+                    return;
+                SpatialProfile p = new SpatialProfile();
+                p.Id = member.Id;
+                p.Name = member.Name;
+                p.IsLocal = member.IsLocal;
+                p.IsHost = member.IsHost;
+                p.ChannelId = member.ChannelId;
+                p.Picture = SpatialPicture(member.IsLocal ? MyPicture() : AvatarImage(member.Id));
+                MemberProfile profile = engine == null || member.IsLocal ? null : engine.GetProfile(member.Id);
+                p.Status = member.IsLocal ? _preferences.Status : (profile == null ? String.Empty : profile.Status);
+                if (engine == null || !engine.IsConnected)
+                    p.State = "Not in a room";
+                else if (member.ChannelId > 0)
+                    p.State = "In voice \u00B7 " + engine.GetChannelName(member.ChannelId) + (member.Deafened ? " \u00B7 deafened" : member.Muted ? " \u00B7 muted" : String.Empty);
+                else
+                    p.State = "In the room";
+                if (member.IsLocal)
+                    p.MyStatus = _friends == null ? null : StatusLabel(_friends.Status);
+                else
+                {
+                    p.Volume = engine.GetPeerVolumePercent(member.Id);
+                    p.MutedForMe = engine.GetPeerMuted(member.Id);
+                    p.ViewerIsHost = engine.IsHost;
+                    LiveStreamInfo live = engine.GetLiveStream(member.Id);
+                    if (live != null)
+                    {
+                        p.LiveText = "Watch stream \u00B7 " + live.Height + "p" + live.Fps;
+                        p.CanWatch = member.ChannelId > 0 && member.ChannelId == engine.LocalChannelId;
+                    }
+                    foreach (VoiceChannelInfo channel in engine.GetChannels())
+                    {
+                        if (channel.Id <= 0 || channel.IsText)
+                            continue;
+                        SpatialRoomChannel c = new SpatialRoomChannel();
+                        c.Id = channel.Id;
+                        c.Name = channel.Name;
+                        p.VoiceChannels.Add(c);
+                    }
+                }
+                SpatialTest.ShowProfile(p);
+            });
+        }
+
+        internal void SpatialSetPeerVolume(uint id, int percent)
+        {
+            SpatialDo(delegate
+            {
+                if (_engine == null)
+                    return;
+                _engine.SetPeerVolumePercent(id, percent);
+                _channels.Invalidate();
+            });
+        }
+
+        internal void SpatialSetPeerMuted(uint id, bool muted)
+        {
+            SpatialDo(delegate
+            {
+                if (_engine == null)
+                    return;
+                _engine.SetPeerMuted(id, muted);
+                _channels.Invalidate();
+            });
+        }
+
+        internal void SpatialSetMyStatus(string label)
+        {
+            SpatialDo(delegate
+            {
+                FriendStatus chosen;
+                try { chosen = (FriendStatus)Enum.Parse(typeof(FriendStatus), label); }
+                catch (ArgumentException) { return; }
+                SetMyStatus(chosen);
+                RefreshShell(_engine);
+            });
+        }
+
+        internal void SpatialEditProfile() { SpatialDialog(delegate { ShowEditProfile(); }); }
+
+        internal void SpatialWatch(uint id)
         {
             SpatialDialog(delegate
             {
-                VoipEngine engine = _engine;
-                if (engine == null)
-                    return;
                 RoomMemberInfo member = FindMember(id);
-                if (member == null)
-                    return;
-                if (!member.IsLocal && member.ChannelId == engine.LocalChannelId && engine.GetLiveStream(member.Id) != null)
+                if (member != null)
                     WatchStream(member);
-                else
-                    ShowProfileCard(member, Cursor.Position);
+            });
+        }
+
+        /// <summary>Hosts only: into a voice channel, or out of voice with 0.</summary>
+        internal void SpatialMovePerson(uint id, int channel)
+        {
+            SpatialDo(delegate
+            {
+                if (_engine != null && _engine.IsHost)
+                    _engine.MoveMemberToChannel(id, channel);
+            });
+        }
+
+        /// <summary>Hosts only. The card has already asked for a second click to confirm.</summary>
+        internal void SpatialKick(uint id, bool ban)
+        {
+            SpatialDo(delegate
+            {
+                if (_engine != null && _engine.IsHost)
+                    _engine.KickMember(id, ban);
             });
         }
     }

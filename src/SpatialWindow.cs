@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -20,6 +21,13 @@ namespace Maela
     /// </summary>
     internal static class SpatialTest
     {
+        public static void ShowProfile(SpatialProfile profile)
+        {
+            Dispatcher dispatcher = _dispatcher;
+            if (dispatcher != null)
+                dispatcher.BeginInvoke((Action)delegate { if (_window != null) _window.ShowProfile(profile); });
+        }
+
         private static readonly object Gate = new object();
         private static Dispatcher _dispatcher;
         private static SpatialWindow _window;
@@ -204,6 +212,20 @@ namespace Maela
         public bool Mine;
     }
 
+    /// <summary>Everything a profile card shows and needs, for one person in the room.</summary>
+    internal sealed class SpatialProfile
+    {
+        public uint Id;
+        public string Name, Status, State;
+        public ImageSource Picture;
+        public bool IsLocal, IsHost, ViewerIsHost, MutedForMe, CanWatch;
+        public string LiveText;          // "Watch stream · 1080p60", or null if they aren't live.
+        public int Volume = 100;         // Just for you, 0 to 200.
+        public string MyStatus;          // Your own card: Online, Away, Busy or Offline.
+        public int ChannelId;
+        public readonly List<SpatialRoomChannel> VoiceChannels = new List<SpatialRoomChannel>();
+    }
+
     /// <summary>A circle you sort rooms or friends into. Favourites and the main one can't be deleted.</summary>
     internal sealed class SpatialCircle
     {
@@ -284,6 +306,9 @@ namespace Maela
         public double Extent; // Big things stay drawn until all of them are off screen.
         public double WrapRadius; // Rooms and channels: the ball's radius, for the dots to wrap.
         public ScaleTransform BallScale; // Grows the ball, not its name, while it's targeted.
+        public SpatialPerson Person;     // Someone in a voice channel: click for their card.
+        public int ChannelId;            // A channel's id, so people can be dropped onto it.
+        public bool VoiceChannel;
         public double Grow;              // 0 to 1: how far it has grown.
         public double ScreenX, ScreenY, ScreenScale; // Where it was last drawn.
         public bool OnScreen = true;
@@ -1063,13 +1088,18 @@ namespace Maela
             {
                 _stars.DriftX = _tiltX;
                 _stars.DriftY = _tiltY;
-                SpatialNode target = _hovered;
+                SpatialNode target = _dragTarget ?? _hovered;
                 bool onBall = false;
                 if (target != null && target.OnScreen)
                 {
-                    // Its clickable area includes the name, so check the pointer is on the ball itself.
-                    double px = _stars.Pointer.X - target.ScreenX, py = _stars.Pointer.Y - target.ScreenY;
-                    onBall = Math.Sqrt(px * px + py * py) <= target.WrapRadius * target.ScreenScale * BallSize(target, now) + 4;
+                    if (target == _dragTarget)
+                        onBall = true;
+                    else
+                    {
+                        // Its clickable area includes the name, so check the pointer is on the ball itself.
+                        double px = _stars.Pointer.X - target.ScreenX, py = _stars.Pointer.Y - target.ScreenY;
+                        onBall = Math.Sqrt(px * px + py * py) <= target.WrapRadius * target.ScreenScale * BallSize(target, now) + 4;
+                    }
                 }
                 _stars.Wrapping = onBall;
                 if (_stars.Wrapping)
@@ -1249,11 +1279,14 @@ namespace Maela
             _mainLabels.Clear();
             _sceneRings.Clear();
             _hovered = null;
+            _roomNode = null;
+            _dragTarget = null;
             _lastLod = -1;
             SpatialItem open = OpenRoomItem();
             if (open != null)
             {
                 AddItemNode(open);
+                _roomNode = _nodes[_nodes.Count - 1];
                 bool showChannels = open.Room.Active && _state.Connected;
                 if (showChannels)
                     BuildRoom(open, animate || !_channelsShown);
@@ -1503,6 +1536,8 @@ namespace Maela
                 SpatialNode node = AddNode(box, 85, 45, x, y, z);
                 node.WrapRadius = 35;
                 node.BallScale = ballScale;
+                node.ChannelId = channel.Id;
+                node.VoiceChannel = !channel.IsText;
                 node.Link = link;
                 // Its line starts at the room, whether or not it is flying out of it.
                 node.FromX = room.X;
@@ -1529,7 +1564,13 @@ namespace Maela
                 {
                     double mid = j - (channel.People.Count - 1) / 2.0, dir = Math.Cos(angle) >= 0 ? 1 : -1;
                     SpatialPerson person = channel.People[j];
-                    SpatialNode m = AddNode(MemberNode(person), 45, 22, x + dir * (92 - Math.Abs(mid) * 14), y + mid * 66, room.Z + 70);
+                    StackPanel label;
+                    Grid face = MemberNode(person, out label);
+                    ScaleTransform faceScale = SplitBall(face, label, 45, 22);
+                    SpatialNode m = AddNode(face, 45, 22, x + dir * (92 - Math.Abs(mid) * 14), y + mid * 66, room.Z + 70);
+                    m.WrapRadius = 20;
+                    m.BallScale = faceScale;
+                    m.Person = person;
                     if (animate)
                     {
                         m.FromX = x; m.FromY = y; m.FromZ = z;
@@ -1537,13 +1578,14 @@ namespace Maela
                         m.Delay = 0.25 + j * 0.06;
                     }
                     uint who = person.Id;
-                    m.Click = delegate { _host.SpatialPersonClicked(who); };
+                    SpatialNode self = m;
+                    m.Click = delegate { RequestProfile(person, self, null); };
                     m.RightClick = delegate { _host.SpatialMemberMenu(who); };
                 }
             }
         }
 
-        private FrameworkElement MemberNode(SpatialPerson person)
+        private Grid MemberNode(SpatialPerson person, out StackPanel label)
         {
             Grid box = new Grid();
             box.Width = 90;
@@ -1577,6 +1619,7 @@ namespace Maela
             if (person.Muted || person.Deafened)
                 line.Children.Add(MuteMark());
             box.Children.Add(line);
+            label = line;
             return box;
         }
 
@@ -1742,7 +1785,7 @@ namespace Maela
             _stars.Pointer = at;
             SpatialNode over = NodeFrom(e.OriginalSource as DependencyObject);
             _hovered = over != null && over.WrapRadius > 0 ? over : null;
-            if (!_panning && ActualWidth > 0)
+            if (!_panning && _card == null && ActualWidth > 0)
             {
                 _toTiltX = at.X / ActualWidth - 0.5;
                 _toTiltY = at.Y / ActualHeight - 0.5;
@@ -1755,6 +1798,12 @@ namespace Maela
         {
             if (e.Key == Key.Escape)
             {
+                if (_card != null)
+                {
+                    CloseCard();
+                    e.Handled = true;
+                    return;
+                }
                 GoBack();
                 e.Handled = true;
                 return;
@@ -1781,7 +1830,9 @@ namespace Maela
         private void SpaceDown(object sender, MouseButtonEventArgs e)
         {
             _pressed = NodeFrom(e.OriginalSource as DependencyObject);
-            bool dragsSomething = _pressed != null && (_pressed.Item != null || _pressed.IsGroupLabel);
+            // Hosts can move anyone; everyone can move themselves.
+            _draggingPerson = _pressed != null && _pressed.Person != null && (_state.IsHost || _pressed.Person.IsLocal);
+            bool dragsSomething = _pressed != null && (_pressed.Item != null || _pressed.IsGroupLabel || _draggingPerson);
             _panning = _openRoomKey == null && !dragsSomething;
             _panMoved = false;
             _panLast = e.GetPosition(_world);
@@ -1801,6 +1852,15 @@ namespace Maela
             _panMoved = true;
             _panLast = at;
             double s = ZoomOf(_camZ);
+            if (_pressed != null && _draggingPerson)
+            {
+                _pressed.X += dx / s; _pressed.FromX = _pressed.X;
+                _pressed.Y += dy / s; _pressed.FromY = _pressed.Y;
+                Panel.SetZIndex(_pressed.Element, 9000);
+                _dragTarget = DropTargetFor(_pressed);
+                _dirty = true;
+                return;
+            }
             if (_pressed != null && _pressed.Item != null)
             {
                 _pressed.X += dx / s; _pressed.FromX = _pressed.X;
@@ -1852,6 +1912,54 @@ namespace Maela
                 _host.SpatialPlaceCircle(_roomsTab, pressed.Group.Id, pressed.Group.X - pressed.Group.Origin, pressed.Group.Y);
             else if (pressed.Item != null)
                 DropItem(pressed.Item, pressed.X, pressed.Y);
+            else if (pressed.Person != null && _draggingPerson)
+                DropPerson(pressed.Person);
+            _draggingPerson = false;
+        }
+
+        /// <summary>A voice channel they aren't in, or the room's ball (out of voice), under the dragged person.</summary>
+        private SpatialNode DropTargetFor(SpatialNode dragged)
+        {
+            SpatialNode best = null;
+            double bestDistance = 1e12;
+            foreach (SpatialNode node in _nodes)
+            {
+                bool channel = node.VoiceChannel && node.ChannelId != dragged.Person.ChannelId;
+                bool outOfVoice = node == _roomNode && dragged.Person.ChannelId > 0;
+                if (!channel && !outOfVoice)
+                    continue;
+                double reach = node.WrapRadius * 1.5;
+                double distance = Math.Sqrt((node.X - dragged.X) * (node.X - dragged.X) + (node.Y - dragged.Y) * (node.Y - dragged.Y));
+                if (distance < reach && distance < bestDistance)
+                {
+                    best = node;
+                    bestDistance = distance;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>Into the channel they were dropped on, or out of voice on the room's ball. Anywhere else, they go back.</summary>
+        private void DropPerson(SpatialPerson person)
+        {
+            SpatialNode target = _dragTarget;
+            _dragTarget = null;
+            if (target != null)
+            {
+                int channel = target == _roomNode ? 0 : target.ChannelId;
+                if (person.IsLocal)
+                {
+                    if (channel > 0)
+                        _host.SpatialJoinVoice(channel);
+                    else
+                        _host.SpatialLeaveVoice();
+                }
+                else
+                    _host.SpatialMovePerson(person.Id, channel);
+            }
+            // Back to where they were until the room confirms the move.
+            RebuildScene(false);
+            _dirty = true;
         }
 
         /// <summary>Dropped inside another circle, it moves there. Anywhere else, it goes back.</summary>
@@ -1897,12 +2005,64 @@ namespace Maela
             RefreshAll();
         }
 
+        private double _lastWheel;
+        private int _wheelPush; // Scrolling past the limit, towards entering or leaving a room.
+
         private void SpaceWheel(object sender, MouseWheelEventArgs e)
         {
-            if (_openRoomKey != null || _flat)
+            if (_flat)
                 return;
-            ZoomBy(Math.Exp(e.Delta * 0.0012), e.GetPosition(_world));
             e.Handled = true;
+            double now = _clock.Elapsed.TotalSeconds;
+            if (now - _lastWheel > 0.6)
+                _wheelPush = 0;
+            _lastWheel = now;
+            if (_openRoomKey != null)
+            {
+                // Zooming out of a room goes back to all of them. Two notches, so a stray one doesn't.
+                if (e.Delta < 0 && (_wheelPush += -e.Delta) >= 240)
+                {
+                    _wheelPush = 0;
+                    GoHome();
+                }
+                else if (e.Delta > 0)
+                    _wheelPush = 0;
+                return;
+            }
+            Point at = e.GetPosition(_world);
+            bool zoomedIn = ZoomOf(_toZ) >= 1.49;
+            ZoomBy(Math.Exp(e.Delta * 0.0012), at);
+            if (e.Delta <= 0 || !zoomedIn || !_roomsTab)
+            {
+                _wheelPush = 0;
+                return;
+            }
+            // Already as close as it goes: one more notch towards a room flies into it.
+            SpatialItem room = RoomNear(at);
+            if (room != null && (_wheelPush += e.Delta) >= 120)
+            {
+                _wheelPush = 0;
+                OpenRoom(room);
+            }
+        }
+
+        /// <summary>The room nearest a point on screen, if it's close enough to mean that one.</summary>
+        private SpatialItem RoomNear(Point at)
+        {
+            double s = ZoomOf(_camZ);
+            double x = _camX + (at.X - CentreX()) / s, y = _camY + (at.Y - _world.ActualHeight / 2) / s;
+            SpatialItem best = null;
+            double bestDistance = 220;
+            foreach (SpatialItem room in _rooms)
+            {
+                double distance = Math.Sqrt((room.X - x) * (room.X - x) + (room.Y - y) * (room.Y - y));
+                if (distance < bestDistance)
+                {
+                    best = room;
+                    bestDistance = distance;
+                }
+            }
+            return best;
         }
 
         private static SpatialNode NodeFrom(DependencyObject source)
@@ -2042,6 +2202,7 @@ namespace Maela
             _overlay.Children.Add(_prompt);
 
             _overlay.Children.Add(_panelHost);
+            _overlay.Children.Add(_cardLayer);
 
             Grid.SetRow(_dock, 1);
             _dock.Background = new SolidColorBrush(SolidBg);
@@ -2110,6 +2271,405 @@ namespace Maela
             _mapView.StrokeThickness = 1;
             _map.Children.Add(_mapView);
             _mapBuilt = true;
+        }
+
+        // ----- Profile cards. The card grows out from behind the person's avatar, which stays put
+        // and becomes the card's picture. From a side list, it opens beside the row. -----
+
+        private const double CardWidth = 300;
+        private const double CardPad = 12;
+        private readonly Canvas _cardLayer = new Canvas();
+        private Border _card;
+        private uint _cardFor;
+        private SpatialNode _cardNode;
+        private FrameworkElement _cardRow;
+        private FrameworkElement _cardHides; // Their avatar and name in the space, hidden while the card shows them.
+        private SpatialNode _roomNode;   // The room's ball, in a room: drop someone on it to take them out of voice.
+        private SpatialNode _dragTarget; // The channel or ball under someone being dragged.
+        private bool _draggingPerson;
+
+        private void RequestProfile(SpatialPerson person, SpatialNode node, FrameworkElement row)
+        {
+            _cardFor = person.Id;
+            _cardNode = node;
+            _cardRow = row;
+            _host.SpatialProfile(person.Id);
+        }
+
+        public void ShowProfile(SpatialProfile profile)
+        {
+            if (profile.Id != _cardFor)
+                return;
+            RemoveCard();
+            double width = _overlay.ActualWidth, height = _overlay.ActualHeight;
+            Point centre;
+            double radius;
+            if (_cardNode != null && _cardNode.OnScreen)
+            {
+                centre = new Point(_cardNode.ScreenX, _cardNode.ScreenY);
+                radius = _cardNode.WrapRadius * _cardNode.ScreenScale * BallSize(_cardNode, _clock.Elapsed.TotalSeconds);
+            }
+            else if (_cardRow != null && _cardRow.IsVisible)
+            {
+                radius = 30;
+                Point side = _cardRow.TranslatePoint(new Point(_cardRow.ActualWidth, _cardRow.ActualHeight / 2), _overlay);
+                centre = new Point(side.X + 12 + CardPad + radius, side.Y);
+            }
+            else
+                return;
+
+            Border card = new Border();
+            card.Width = CardWidth;
+            card.Background = new SolidColorBrush(SolidBg);
+            card.BorderBrush = new SolidColorBrush(LineCol);
+            card.BorderThickness = new Thickness(1);
+            card.CornerRadius = new CornerRadius(16);
+            card.Effect = new DropShadowEffect { BlurRadius = 24, ShadowDepth = 0, Opacity = 0.55, Color = Colors.Black };
+
+            FrameworkElement header = CardHeader(profile, radius);
+            FrameworkElement body = CardBody(profile);
+            StackPanel stack = new StackPanel();
+            card.Child = stack;
+            stack.Children.Add(header);
+            stack.Children.Add(body);
+            card.Measure(new Size(CardWidth, double.PositiveInfinity));
+            double cardHeight = card.DesiredSize.Height;
+
+            // The avatar sits in the card's top corner; with no room below, it sits in the bottom one.
+            bool flipY = centre.Y - radius - CardPad + cardHeight > height - 8;
+            if (flipY)
+            {
+                stack.Children.Clear();
+                stack.Children.Add(body);
+                stack.Children.Add(CardHeader(profile, radius));
+            }
+            // Always opens to the right, picture first. Near the right edge it slides left to stay on screen.
+            double left = Math.Max(8, Math.Min(centre.X - radius - CardPad, width - CardWidth - 8));
+            double top = flipY ? centre.Y + radius + CardPad - cardHeight : centre.Y - radius - CardPad;
+            top = Math.Max(8, top);
+
+            // A click anywhere else closes it.
+            Rectangle catcher = new Rectangle();
+            catcher.Width = width;
+            catcher.Height = height;
+            catcher.Fill = Brushes.Transparent;
+            catcher.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e) { e.Handled = true; CloseCard(); };
+            catcher.MouseRightButtonDown += delegate(object s, MouseButtonEventArgs e) { e.Handled = true; CloseCard(); };
+            _cardLayer.Children.Add(catcher);
+
+            Canvas.SetLeft(card, left);
+            Canvas.SetTop(card, top);
+            card.RenderTransformOrigin = new Point((centre.X - left) / CardWidth, (centre.Y - top) / cardHeight);
+            ScaleTransform grow = new ScaleTransform(0.82, 0.82);
+            card.RenderTransform = grow;
+            card.Opacity = 0;
+            _cardLayer.Children.Add(card);
+            _card = card;
+            if (_cardNode != null && _cardNode.OnScreen)
+            {
+                _cardHides = _cardNode.Element;
+                _cardHides.Opacity = 0;
+            }
+
+            // Grows out of the avatar.
+            Duration time = new Duration(TimeSpan.FromMilliseconds(170));
+            QuadraticEase ease = new QuadraticEase { EasingMode = EasingMode.EaseOut };
+            grow.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1, time) { EasingFunction = ease });
+            grow.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1, time) { EasingFunction = ease });
+            card.BeginAnimation(OpacityProperty, new DoubleAnimation(1, time));
+        }
+
+        private void CloseCard()
+        {
+            Border card = _card;
+            if (card == null)
+                return;
+            _card = null;
+            _cardFor = 0;
+            ScaleTransform grow = card.RenderTransform as ScaleTransform;
+            Duration time = new Duration(TimeSpan.FromMilliseconds(120));
+            DoubleAnimation fade = new DoubleAnimation(0, time);
+            fade.Completed += delegate
+            {
+                if (_card != null)
+                    return;
+                _cardLayer.Children.Clear();
+                ShowHidden();
+            };
+            if (grow != null)
+            {
+                grow.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.85, time));
+                grow.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.85, time));
+            }
+            card.BeginAnimation(OpacityProperty, fade);
+        }
+
+        private void RemoveCard()
+        {
+            _cardLayer.Children.Clear();
+            _card = null;
+            ShowHidden();
+        }
+
+        private void ShowHidden()
+        {
+            if (_cardHides != null)
+                _cardHides.Opacity = 1;
+            _cardHides = null;
+        }
+
+        /// <summary>The picture in the corner, exactly where the avatar is, with the name beside it.</summary>
+        private FrameworkElement CardHeader(SpatialProfile profile, double radius)
+        {
+            double size = 2 * radius;
+            Color tint = ColorFor(profile.Name);
+            Grid header = new Grid();
+            header.MinHeight = size + 2 * CardPad;
+            header.Background = new LinearGradientBrush(Fade(tint, 0x99), Fade(tint, 0x00), 90);
+
+            Border avatar = Avatar(profile.Name, size, null, profile.Picture);
+            avatar.HorizontalAlignment = HorizontalAlignment.Left;
+            avatar.VerticalAlignment = VerticalAlignment.Top;
+            avatar.Margin = new Thickness(CardPad, CardPad, CardPad, CardPad);
+            header.Children.Add(avatar);
+
+            StackPanel words = new StackPanel();
+            words.VerticalAlignment = VerticalAlignment.Center;
+            words.Margin = new Thickness(size + 2 * CardPad, CardPad, CardPad + 4, CardPad);
+            StackPanel nameLine = new StackPanel();
+            nameLine.Orientation = Orientation.Horizontal;
+            TextBlock name = Label(profile.Name, 20, TextCol, true);
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            name.MaxWidth = CardWidth - size - 3 * CardPad - 30;
+            nameLine.Children.Add(name);
+            if (profile.IsHost)
+            {
+                TextBlock crown = Label("♛", 16, Color.FromRgb(0xF0, 0xB2, 0x32), false);
+                crown.Margin = new Thickness(6, 3, 0, 0);
+                crown.ToolTip = "Host";
+                nameLine.Children.Add(crown);
+            }
+            words.Children.Add(nameLine);
+            if (!String.IsNullOrEmpty(profile.Status))
+            {
+                TextBlock status = Label(profile.Status, 13, Text2, false);
+                status.TextWrapping = TextWrapping.Wrap;
+                words.Children.Add(status);
+            }
+            words.Children.Add(Label(profile.State, 12, Muted, false));
+            header.Children.Add(words);
+            return header;
+        }
+
+        private FrameworkElement CardBody(SpatialProfile profile)
+        {
+            StackPanel body = new StackPanel();
+            body.Margin = new Thickness(CardPad, 2, CardPad, CardPad);
+            if (profile.IsLocal)
+            {
+                body.Children.Add(CardCaption("Appear as"));
+                WrapPanel choices = new WrapPanel();
+                foreach (string choice in new[] { "Online", "Away", "Busy", "Offline" })
+                {
+                    string picked = choice;
+                    Border option = Chip(choice, delegate
+                    {
+                        _host.SpatialSetMyStatus(picked);
+                        CloseCard();
+                    });
+                    option.Margin = new Thickness(0, 0, 6, 6);
+                    if (choice == profile.MyStatus)
+                    {
+                        option.Background = new SolidColorBrush(Fade(AccentCol, 0x40));
+                        option.BorderBrush = new SolidColorBrush(AccentCol);
+                    }
+                    choices.Children.Add(option);
+                }
+                body.Children.Add(choices);
+                body.Children.Add(CardButton("Edit profile", AccentCol, OnAccent, delegate { CloseCard(); _host.SpatialEditProfile(); }));
+                return body;
+            }
+
+            uint id = profile.Id;
+            if (profile.LiveText != null)
+            {
+                if (profile.CanWatch)
+                    body.Children.Add(CardButton(profile.LiveText, Bad, Colors.White, delegate { CloseCard(); _host.SpatialWatch(id); }));
+                else
+                {
+                    TextBlock note = Label("They're live. Join their voice channel to watch.", 12, Muted, false);
+                    note.TextWrapping = TextWrapping.Wrap;
+                    note.Margin = new Thickness(0, 0, 0, 8);
+                    body.Children.Add(note);
+                }
+            }
+
+            DockPanel volumeLine = new DockPanel();
+            TextBlock readout = Label(profile.Volume + "%", 12, Muted, false);
+            DockPanel.SetDock(readout, Dock.Right);
+            volumeLine.Children.Add(readout);
+            volumeLine.Children.Add(CardCaption("Volume (just for you)"));
+            body.Children.Add(volumeLine);
+            body.Children.Add(VolumeSlider(profile.Volume, readout, delegate(int value) { _host.SpatialSetPeerVolume(id, value); }));
+
+            bool muted = profile.MutedForMe;
+            Border mute = null;
+            mute = Chip(muted ? "✓  Muted for you" : "Mute for me", delegate
+            {
+                muted = !muted;
+                ((TextBlock)mute.Child).Text = muted ? "✓  Muted for you" : "Mute for me";
+                mute.BorderBrush = new SolidColorBrush(muted ? Bad : LineCol);
+                _host.SpatialSetPeerMuted(id, muted);
+            });
+            mute.BorderBrush = new SolidColorBrush(muted ? Bad : LineCol);
+            mute.HorizontalAlignment = HorizontalAlignment.Left;
+            mute.Margin = new Thickness(0, 6, 0, 0);
+            body.Children.Add(mute);
+
+            if (profile.ViewerIsHost)
+            {
+                TextBlock host = Label("HOST", 11, Muted, true);
+                host.Margin = new Thickness(0, 14, 0, 4);
+                body.Children.Add(host);
+                body.Children.Add(CardCaption("Move to"));
+                WrapPanel channels = new WrapPanel();
+                foreach (SpatialRoomChannel channel in profile.VoiceChannels)
+                {
+                    int target = channel.Id;
+                    bool here = channel.Id == profile.ChannelId;
+                    Border move = Chip(channel.Name, delegate { if (!here) { CloseCard(); _host.SpatialMovePerson(id, target); } });
+                    move.Margin = new Thickness(0, 0, 6, 6);
+                    if (here)
+                    {
+                        move.Opacity = 0.45;
+                        move.Cursor = Cursors.Arrow;
+                        move.ToolTip = "They're here";
+                    }
+                    channels.Children.Add(move);
+                }
+                if (profile.ChannelId > 0)
+                {
+                    Border outOfVoice = Chip("Remove from voice", delegate { CloseCard(); _host.SpatialMovePerson(id, 0); });
+                    outOfVoice.Margin = new Thickness(0, 0, 6, 6);
+                    channels.Children.Add(outOfVoice);
+                }
+                body.Children.Add(channels);
+
+                Grid actions = new Grid();
+                actions.Margin = new Thickness(0, 6, 0, 0);
+                actions.ColumnDefinitions.Add(new ColumnDefinition());
+                actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+                actions.ColumnDefinitions.Add(new ColumnDefinition());
+                FrameworkElement kick = ConfirmButton("Kick", "Click again to kick", Raise, TextCol, delegate { CloseCard(); _host.SpatialKick(id, false); });
+                FrameworkElement ban = ConfirmButton("Ban", "Click again to ban", Bad, Colors.White, delegate { CloseCard(); _host.SpatialKick(id, true); });
+                Grid.SetColumn(ban, 2);
+                actions.Children.Add(kick);
+                actions.Children.Add(ban);
+                body.Children.Add(actions);
+            }
+            return body;
+        }
+
+        private static TextBlock CardCaption(string text)
+        {
+            TextBlock caption = Label(text, 12, Text2, true);
+            caption.Margin = new Thickness(0, 4, 0, 6);
+            return caption;
+        }
+
+        private static Border CardButton(string text, Color colour, Color ink, Action click)
+        {
+            Border button = Clickable(click);
+            button.Background = new SolidColorBrush(colour);
+            button.CornerRadius = new CornerRadius(9);
+            button.Padding = new Thickness(12, 9, 12, 9);
+            button.Margin = new Thickness(0, 4, 0, 4);
+            TextBlock label = Label(text, 13.5, ink, true);
+            label.HorizontalAlignment = HorizontalAlignment.Center;
+            button.Child = label;
+            return button;
+        }
+
+        /// <summary>Asks for a second click before acting, so kick and ban can't happen by accident.</summary>
+        private static Border ConfirmButton(string text, string confirm, Color colour, Color ink, Action act)
+        {
+            bool armed = false;
+            Border button = null;
+            button = CardButton(text, colour, ink, delegate
+            {
+                if (armed)
+                {
+                    act();
+                    return;
+                }
+                armed = true;
+                ((TextBlock)button.Child).Text = confirm;
+            });
+            button.MouseLeave += delegate
+            {
+                armed = false;
+                ((TextBlock)button.Child).Text = text;
+            };
+            return button;
+        }
+
+        /// <summary>0 to 200%, drawn in the theme. Changes go straight to the app as you drag.</summary>
+        private static FrameworkElement VolumeSlider(int value, TextBlock readout, Action<int> changed)
+        {
+            Grid track = new Grid();
+            track.Height = 24;
+            track.Background = Brushes.Transparent;
+            track.Cursor = Cursors.Hand;
+            Border rail = new Border();
+            rail.Height = 4;
+            rail.CornerRadius = new CornerRadius(2);
+            rail.Background = new SolidColorBrush(Raise);
+            rail.VerticalAlignment = VerticalAlignment.Center;
+            track.Children.Add(rail);
+            Border fill = new Border();
+            fill.Height = 4;
+            fill.CornerRadius = new CornerRadius(2);
+            fill.Background = new SolidColorBrush(AccentCol);
+            fill.HorizontalAlignment = HorizontalAlignment.Left;
+            fill.VerticalAlignment = VerticalAlignment.Center;
+            track.Children.Add(fill);
+            Ellipse knob = new Ellipse();
+            knob.Width = 14;
+            knob.Height = 14;
+            knob.Fill = new SolidColorBrush(TextCol);
+            knob.HorizontalAlignment = HorizontalAlignment.Left;
+            knob.VerticalAlignment = VerticalAlignment.Center;
+            track.Children.Add(knob);
+            int current = Math.Max(0, Math.Min(200, value));
+            Action place = delegate
+            {
+                double width = track.ActualWidth;
+                if (width <= 0)
+                    return;
+                double share = current / 200.0;
+                fill.Width = width * share;
+                knob.Margin = new Thickness(Math.Max(0, Math.Min(width - 14, width * share - 7)), 0, 0, 0);
+                readout.Text = current + "%";
+            };
+            Action<MouseEventArgs> set = delegate(MouseEventArgs e)
+            {
+                double width = track.ActualWidth;
+                if (width <= 0)
+                    return;
+                int next = (int)Math.Round(Math.Max(0, Math.Min(1, e.GetPosition(track).X / width)) * 200);
+                if (Math.Abs(next - 100) <= 4)
+                    next = 100; // Easy to land back on normal.
+                if (next == current)
+                    return;
+                current = next;
+                place();
+                changed(current);
+            };
+            track.SizeChanged += delegate { place(); };
+            track.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e) { track.CaptureMouse(); set(e); e.Handled = true; };
+            track.MouseMove += delegate(object s, MouseEventArgs e) { if (track.IsMouseCaptured) set(e); };
+            track.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e) { track.ReleaseMouseCapture(); e.Handled = true; };
+            return track;
         }
 
         // ----- Right-click menus, drawn here in the theme. -----
@@ -2547,7 +3107,8 @@ namespace Maela
         private FrameworkElement PersonRow(SpatialPerson person, bool roomy)
         {
             uint who = person.Id;
-            Border row = Clickable(delegate { _host.SpatialPersonClicked(who); });
+            Border row = null;
+            row = Clickable(delegate { RequestProfile(person, null, row); });
             row.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs e)
             {
                 e.Handled = true;
@@ -2582,8 +3143,6 @@ namespace Maela
             if (person.Muted || person.Deafened)
                 line.Children.Add(MuteMark());
             row.Child = line;
-            if (person.Live && !person.IsLocal)
-                row.ToolTip = "Click to watch " + person.Name + "'s stream, if you are in this channel";
             return row;
         }
 
