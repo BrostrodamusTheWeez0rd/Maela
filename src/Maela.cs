@@ -290,6 +290,7 @@ namespace Maela
         public bool Owned;
         public int PreferredPort;
         public bool KeepAlive = true;
+        public string Circle = String.Empty; // Which Spatial circle it sits in. Empty: the main one.
         public readonly List<string> ChannelNames = new List<string>();
         public RoomPresence Presence = RoomPresence.Unknown;
         public int MemberCount;
@@ -487,6 +488,8 @@ namespace Maela
                         byte[] banner = parts[9].Length > 0 ? Convert.FromBase64String(parts[9]) : null;
                         room.SetArt(RoomArt.Unpack(RoomArt.Icon, icon) != null ? icon : null, RoomArt.Unpack(RoomArt.Banner, banner) != null ? banner : null);
                     }
+                    if (parts.Length >= 11)
+                        room.Circle = parts[10] == "1" ? "fav" : parts[10] == "0" ? String.Empty : parts[10];
                     if (room.Owned && room.ChannelNames.Count == 0)
                         room.ChannelNames.Add("General");
                     if (String.IsNullOrWhiteSpace(room.Name))
@@ -518,7 +521,8 @@ namespace Maela
                         string password = String.IsNullOrEmpty(room.Password) ? String.Empty : SecretStore.Protect(Encoding.UTF8.GetBytes(room.Password));
                         lines.Add((room.Owned ? "1" : "0") + "|" + room.PreferredPort + "|" + Encode(room.Name) + "|" + Encode(room.Invite) + "|" + (room.KeepAlive ? "1" : "0") + "|" + Encode(channelText) + "|" + key + "|" + password
                             + "|" + (room.IconBlob == null ? String.Empty : Convert.ToBase64String(room.IconBlob))
-                            + "|" + (room.BannerBlob == null ? String.Empty : Convert.ToBase64String(room.BannerBlob)));
+                            + "|" + (room.BannerBlob == null ? String.Empty : Convert.ToBase64String(room.BannerBlob))
+                            + "|" + (room.Circle ?? String.Empty));
                     }
                     EncryptedFile.Write(FilePath, Encoding.UTF8.GetBytes(String.Join("\n", lines.ToArray())));
                     return true;
@@ -579,6 +583,11 @@ namespace Maela
         public bool AutoUpdate = true;
         public string SkippedVersion = String.Empty;
         public string Theme = "maela-red";
+        public bool ClassicLayout; // The original window instead of the Spatial one.
+        // Spatial circles, private to this PC. See MainForm.Spatial.cs for the format.
+        public string RoomCircles = String.Empty;
+        public string FriendCircles = String.Empty;
+        public string FriendCircleOf = String.Empty;
         public bool NoiseSuppression = true;
         public bool SetupDone;
         public bool SoundEffects = true;
@@ -609,6 +618,10 @@ namespace Maela
             p.AutoUpdate = AutoUpdate;
             p.SkippedVersion = SkippedVersion;
             p.Theme = Theme;
+            p.ClassicLayout = ClassicLayout;
+            p.RoomCircles = RoomCircles;
+            p.FriendCircles = FriendCircles;
+            p.FriendCircleOf = FriendCircleOf;
             p.NoiseSuppression = NoiseSuppression;
             p.SetupDone = SetupDone;
             p.SoundEffects = SoundEffects;
@@ -690,6 +703,16 @@ namespace Maela
                     {
                         p.Theme = value.Trim();
                     }
+                    else if (key == "classic")
+                    {
+                        p.ClassicLayout = value.Trim() == "1";
+                    }
+                    else if (key == "roomcircles")
+                        p.RoomCircles = value.Trim();
+                    else if (key == "friendcircles")
+                        p.FriendCircles = value.Trim();
+                    else if (key == "friendcircleof")
+                        p.FriendCircleOf = value.Trim();
                     else if (key == "noise")
                     {
                         p.NoiseSuppression = value != "0";
@@ -773,6 +796,10 @@ namespace Maela
                     "updates=" + (p.AutoUpdate ? "1" : "0"),
                     "skip=" + (p.SkippedVersion == null ? String.Empty : p.SkippedVersion.Trim()),
                     "theme=" + (p.Theme ?? "maela-red"),
+                    "classic=" + (p.ClassicLayout ? "1" : "0"),
+                    "roomcircles=" + (p.RoomCircles ?? String.Empty),
+                    "friendcircles=" + (p.FriendCircles ?? String.Empty),
+                    "friendcircleof=" + (p.FriendCircleOf ?? String.Empty),
                     "noise=" + (p.NoiseSuppression ? "1" : "0"),
                     "setup=" + (p.SetupDone ? "1" : "0"),
                     "sfx=" + (p.SoundEffects ? "1" : "0"),

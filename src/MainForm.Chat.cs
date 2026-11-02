@@ -251,7 +251,7 @@ namespace Maela
             if (fromOthers && _chatNewestSeen != 0)
             {
                 FlashForAttention();
-                if (!ContainsFocus || WindowState == FormWindowState.Minimized)
+                if (!AppFocused || WindowState == FormWindowState.Minimized)
                     PlaySound(SoundCue.Message);
             }
             _chatNewestSeen = Math.Max(_chatNewestSeen, newestConfirmed);
@@ -832,13 +832,13 @@ namespace Maela
 
         private void FlashForAttention()
         {
-            if (ContainsFocus && WindowState != FormWindowState.Minimized)
+            if (AppFocused && WindowState != FormWindowState.Minimized)
                 return;
             try
             {
                 ChatNativeMethods.FLASHWINFO info = new ChatNativeMethods.FLASHWINFO();
                 info.cbSize = (uint)Marshal.SizeOf(typeof(ChatNativeMethods.FLASHWINFO));
-                info.hwnd = Handle;
+                info.hwnd = SpatialMode ? SpatialTest.WindowHandle : Handle;
                 info.dwFlags = ChatNativeMethods.FLASHW_TRAY | ChatNativeMethods.FLASHW_TIMERNOFG;
                 info.uCount = 3;
                 ChatNativeMethods.FlashWindowEx(ref info);

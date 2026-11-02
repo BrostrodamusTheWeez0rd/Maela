@@ -78,6 +78,7 @@ namespace Maela
             _uiTimer.Interval = 120;
             _uiTimer.Tick += UiTimerTick;
             _uiTimer.Tick += delegate { SingleInstance.AnswerPing(); };
+            _uiTimer.Tick += delegate { PushSpatialSnapshot(); };
             _uiTimer.Start();
             FormClosing += MainFormClosing;
             Program.LeaveRoomOnCrash = delegate
@@ -109,7 +110,17 @@ namespace Maela
                 if (_preferences.AutoUpdate)
                     CheckForUpdates(false);
             };
-            Shown += delegate
+            Shown += delegate { FirstShown(); };
+        }
+
+        private bool _firstShownDone;
+
+        /// <summary>Start-up that waits for a window, whichever layout is showing.</summary>
+        private void FirstShown()
+        {
+            if (_firstShownDone)
+                return;
+            _firstShownDone = true;
             {
                 if (!_preferences.SetupDone)
                 {
@@ -145,7 +156,7 @@ namespace Maela
                     _notifyIcon.BalloonTipText = "You are now running m\u00E6la " + Updater.CurrentVersionText + ".";
                     try { _notifyIcon.ShowBalloonTip(3000); } catch { }
                 }
-            };
+            }
         }
 
         /// <summary>
@@ -221,7 +232,7 @@ namespace Maela
                 return;
 
             _pendingUpdate = info;
-            if (!Visible || WindowState == FormWindowState.Minimized)
+            if (!AppOnScreen || WindowState == FormWindowState.Minimized)
             {
                 // Running in the tray: don't pop a dialog over whatever the user is doing.
                 _notifyIcon.Visible = true;
@@ -652,6 +663,7 @@ namespace Maela
                 Theme.Apply(Theme.ById(_preferences.Theme));
                 RefreshShell(_engine);
                 Invalidate(true);
+                ApplyLayoutChoice();
             }
             bool checkNow = form.CheckForUpdatesRequested;
             form.Dispose();
@@ -1500,6 +1512,7 @@ namespace Maela
                     ShowTrayTip("m\u00E6la is still running", "You're still in your room. Click the tray icon to reopen, or right-click it and choose Quit.");
                 }
                 Hide();
+                SpatialTest.HideWindow();
                 return;
             }
 
@@ -1567,6 +1580,13 @@ namespace Maela
 
         private void RestoreFromTray()
         {
+            if (SpatialMode)
+            {
+                SpatialTest.Open(this);
+                if (_pendingUpdate != null)
+                    BeginInvoke((MethodInvoker)ShowPendingUpdate);
+                return;
+            }
             if (!Visible)
                 Show();
             if (WindowState == FormWindowState.Minimized)

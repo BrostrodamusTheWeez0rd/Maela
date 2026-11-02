@@ -400,7 +400,7 @@ namespace Maela
 
         private void FriendMessageArrived(string id)
         {
-            if (_friendsView != null && _friendsView.IsReading(id))
+            if ((_friendsView != null && _friendsView.IsReading(id)) || (SpatialMode && id == _spatialFriendId && AppFocused))
             {
                 _friends.MarkRead(id);
                 return;
@@ -418,7 +418,7 @@ namespace Maela
             if (_friends.Status == FriendStatus.Busy)
                 return;
             PlaySound(SoundCue.Message);
-            if (!Visible)
+            if (!AppOnScreen)
                 ShowTrayTip("mæla", text); // Who it's from, never what it says.
             else
                 FlashForAttention();
@@ -522,7 +522,7 @@ namespace Maela
                     _incomingCall.Answered += delegate(bool accept)
                     {
                         _incomingCall = null;
-                        if (accept && !Visible)
+                        if (accept && !AppOnScreen)
                             RestoreFromTray();
                         if (!accept || !OkToLeaveRoomForCall())
                         {
@@ -540,7 +540,7 @@ namespace Maela
                         _friends.AcceptCall(_friendMapping != null);
                     };
                     _incomingCall.Ring += delegate { PlaySound(SoundCue.Ring); };
-                    if (!Visible)
+                    if (!AppOnScreen)
                         ShowTrayTip("m\u00E6la", FriendName(id) + " is calling");
                     FlashForAttention();
                     _incomingCall.Show();
@@ -1076,7 +1076,7 @@ namespace Maela
             RefreshAll(true);
         }
 
-        private void CopyCode()
+        internal void CopyCode()
         {
             string code = _friends.Code;
             if (code.Length == 0)
@@ -1107,7 +1107,7 @@ namespace Maela
             }
         }
 
-        private void BackUp()
+        internal void BackUp()
         {
             string password;
             using (BackupPasswordDialog dialog = new BackupPasswordDialog(true))
@@ -1141,7 +1141,7 @@ namespace Maela
             RefreshAll(true);
         }
 
-        private void Restore()
+        internal void Restore()
         {
             string path;
             using (OpenFileDialog open = new OpenFileDialog())
@@ -1253,7 +1253,10 @@ namespace Maela
                 if (MessageBox.Show(this, question, "Remove", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     _friends.Remove(person.Id);
             });
-            menu.Show(anchor, at);
+            if (anchor != null)
+                menu.Show(anchor, at);
+            else
+                menu.Show(at);
         }
 
         private static int Rank(FriendInfo person)

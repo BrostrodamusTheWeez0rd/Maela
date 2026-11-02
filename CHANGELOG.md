@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **A new Spatial layout.** Your rooms and friends float in their own spaces, which you can pan and
+  zoom across. Click a room to fly into it, with its channels and the people in them spread around
+  it, then click a channel to read and write in a flat chat panel. Voice controls stay in a dock at
+  the bottom wherever you are.
+- **Sort things into circles.** Drag rooms and friends between Favourites, the main circle and
+  circles of your own. Drag a circle's name to move it, and right-click it to rename or delete it.
+  Circles are kept on your PC only.
+- **Classic stays.** Settings > Appearance > Classic layout brings back the original window. You can
+  switch at any time without leaving your room or call.
+- Spatial follows your colour theme. Midnight gives it the neon look.
+
 ## 0.12.0 - Live stream changes and room art
 
 - **Hosts can dress up their room.** Right-click a room you host to rename it, or set a picture and

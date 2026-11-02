@@ -389,6 +389,7 @@ namespace Maela
         private readonly TrackBar _master = new TrackBar();
         private readonly ToggleSwitch _echo;
         private readonly ToggleSwitch _noise;
+        private readonly ToggleSwitch _classic;
         private readonly ToggleSwitch _sounds;
         private readonly ToggleSwitch _agc;
         private readonly ToggleSwitch _autoUpdate;
@@ -433,6 +434,7 @@ namespace Maela
                 x += card.Width + 12;
             }
             Cursor_Y += 122;
+            _classic = AddToggle("Classic layout", "Use the original mæla window instead of the Spatial one.", _preferences.ClassicLayout);
 
             AddSection("Voice & audio");
             AddFieldLabel("Input device", Margin_X, Cursor_Y);
@@ -628,6 +630,7 @@ namespace Maela
             _preferences.MicVolumePercent = _mic.Value;
             _preferences.MasterVolumePercent = _master.Value;
             _preferences.EchoCancellation = _echo.Checked;
+            _preferences.ClassicLayout = _classic.Checked;
             _preferences.NoiseSuppression = _noise.Checked;
             _preferences.SoundEffects = _sounds.Checked;
             _preferences.AutoGain = _agc.Checked;

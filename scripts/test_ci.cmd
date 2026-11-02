@@ -19,7 +19,8 @@ if errorlevel 1 (
     echo ERROR: dependency download or verification failed.
     exit /b 1
 )
-set "REFS=/reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll /reference:System.Security.dll"
+for %%d in ("%CSC%") do set "FXDIR=%%~dpd"
+set "REFS=/reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll /reference:System.Security.dll /lib:"%FXDIR%WPF" /reference:PresentationCore.dll /reference:PresentationFramework.dll /reference:WindowsBase.dll /reference:System.Xaml.dll"
 set "ENGINE=/unsafe /define:PARITY /nowarn:0162,0168,0219,0414,0649,0675,1591,1573 "src\*.cs" "tests\TestSupport.cs" /recurse:"obj\deps\concentus\CSharp\Concentus\*.cs""
 
 echo === Crypto ===

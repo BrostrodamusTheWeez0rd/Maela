@@ -55,9 +55,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem WPF ships with .NET Framework, so referencing it adds nothing to install or carry around.
+for %%d in ("%CSC%") do set "FXDIR=%%~dpd"
+set "WPF=/lib:"%FXDIR%WPF" /reference:PresentationCore.dll /reference:PresentationFramework.dll /reference:WindowsBase.dll /reference:System.Xaml.dll"
+
 rem Concentus (the Opus codec, BSD-3) is compiled straight into the exe so mæla stays a
 rem single file. PARITY matches upstream's build; warnings in the ported C code are expected.
-"%CSC%" /nologo /target:winexe /optimize+ /unsafe /define:PARITY /nowarn:0162,0168,0219,0414,0649,0675,1591,1573 /out:"dist\Maela.exe" /win32icon:"assets\Maela.ico" /resource:"assets\MaelaMark.png",MaelaMark.png /resource:"THIRD_PARTY_NOTICES.txt",THIRD_PARTY_NOTICES.txt /resource:"LICENSE",LICENSE.txt /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll /reference:System.Security.dll "src\*.cs" "obj\VersionInfo.cs" /recurse:"obj\deps\concentus\CSharp\Concentus\*.cs"
+"%CSC%" /nologo /target:winexe /optimize+ /unsafe /define:PARITY /nowarn:0162,0168,0219,0414,0649,0675,1591,1573 /out:"dist\Maela.exe" /win32icon:"assets\Maela.ico" /resource:"assets\MaelaMark.png",MaelaMark.png /resource:"THIRD_PARTY_NOTICES.txt",THIRD_PARTY_NOTICES.txt /resource:"LICENSE",LICENSE.txt /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Xml.dll /reference:System.Security.dll %WPF% "src\*.cs" "obj\VersionInfo.cs" /recurse:"obj\deps\concentus\CSharp\Concentus\*.cs"
 if errorlevel 1 exit /b 1
 
 copy /y "README.md" "dist\README.md" >nul

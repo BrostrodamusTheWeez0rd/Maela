@@ -70,30 +70,7 @@ namespace Maela
                 else
                     ShowFriendsView();
             };
-            _rail.RoomClicked += delegate(SavedRoom room)
-            {
-                ShowRoomsView();
-                // One room at a time: opening another room leaves the current one.
-                if (_engine != null && _engine.IsRunning && !Object.ReferenceEquals(room, _activeSavedRoom))
-                {
-                    string current = String.IsNullOrEmpty(_activeRoomName) ? "this room" : _activeRoomName;
-                    string question = _engine.IsHost
-                        ? "Stop " + current + " and open " + room.Name + "?" + (_engine.MemberCount > 1 ? " Everyone in " + current + " will be disconnected." : String.Empty)
-                        : "Leave " + current + " and join " + room.Name + "?";
-                    if (MessageBox.Show(this, question, "Switch room", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-                        return;
-                    StopEngine();
-                    _selectedRoom = room;
-                    _rail.Selected = room;
-                    _rail.Invalidate();
-                    StartSelectedRoom();
-                    return;
-                }
-                _selectedRoom = room;
-                _rail.Selected = room;
-                _rail.Invalidate();
-                UpdateSelectedRoomUi();
-            };
+            _rail.RoomClicked += RoomClickedByUser;
             _rail.RoomMenuRequested += delegate(SavedRoom room, Point at)
             {
                 ShowRoomsView();
@@ -213,6 +190,31 @@ namespace Maela
             ResumeLayout(true);
             Theme.Changed += delegate { ApplyTheme(); };
             ApplyTheme();
+        }
+
+        private void RoomClickedByUser(SavedRoom room)
+        {
+            ShowRoomsView();
+            // One room at a time: opening another room leaves the current one.
+            if (_engine != null && _engine.IsRunning && !Object.ReferenceEquals(room, _activeSavedRoom))
+            {
+                string current = String.IsNullOrEmpty(_activeRoomName) ? "this room" : _activeRoomName;
+                string question = _engine.IsHost
+                    ? "Stop " + current + " and open " + room.Name + "?" + (_engine.MemberCount > 1 ? " Everyone in " + current + " will be disconnected." : String.Empty)
+                    : "Leave " + current + " and join " + room.Name + "?";
+                if (MessageBox.Show(this, question, "Switch room", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    return;
+                StopEngine();
+                _selectedRoom = room;
+                _rail.Selected = room;
+                _rail.Invalidate();
+                StartSelectedRoom();
+                return;
+            }
+            _selectedRoom = room;
+            _rail.Selected = room;
+            _rail.Invalidate();
+            UpdateSelectedRoomUi();
         }
 
         private void BuildAddMenu()
