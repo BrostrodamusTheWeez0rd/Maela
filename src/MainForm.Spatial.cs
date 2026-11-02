@@ -55,7 +55,7 @@ namespace Maela
             _preferences.ClassicLayout = GraphicsCard == null;
         }
 
-        private const string WhatsNewId = "spatial"; // Change it to show a new announcement after a later update.
+        private const string WhatsNewId = "0.13"; // Change it to show a new announcement after a later update.
 
         /// <summary>
         /// The announcement for this update, once. New installs have just seen setup, so they skip
@@ -225,7 +225,17 @@ namespace Maela
             SpatialSnapshot s = new SpatialSnapshot();
             s.MyName = _preferences.DisplayName;
             s.ThemeId = Theme.Current.Id;
+            s.FrameRate = _preferences.FrameRate;
+            s.ReadingFont = _preferences.ReadingFont;
+            s.TextScale = _preferences.TextScale;
+            s.ReduceMotion = _preferences.ReduceMotion;
             s.MyPicture = SpatialPicture(MyPicture());
+            if (_preferences.ShowDecos)
+            {
+                s.MyDeco = _preferences.PictureDeco;
+                s.MyDecoA = _preferences.BannerColourA;
+                s.MyDecoB = _preferences.BannerColourB;
+            }
             s.MyStatus = _friends == null ? "Offline" : StatusLabel(_friends.Status);
             s.Muted = _muted;
             s.Deafened = _deafened;
@@ -244,9 +254,8 @@ namespace Maela
             StringBuilder structure = new StringBuilder();
             StringBuilder talk = new StringBuilder();
             LoadCircles();
-            s.RoomCircles = CopyCircles(_roomCircles);
-            s.FriendCircles = CopyCircles(_friendCircles);
-            structure.Append(FormatCircles(_roomCircles)).Append(FormatCircles(_friendCircles));
+            s.Circles = CopyCircles(_circles);
+            structure.Append(FormatCircles(_circles));
             bool sawActive = false;
             foreach (SavedRoom room in _savedRooms)
             {
@@ -261,6 +270,10 @@ namespace Maela
                 r.Members = room.MemberCount;
                 r.Max = room.MaxMembers;
                 r.Picture = SpatialPicture(room.IconImage);
+                r.Placed = room.Placed;
+                r.PlaceX = room.PlaceX;
+                r.PlaceY = room.PlaceY;
+                r.Size = room.Size;
                 sawActive |= r.Active;
                 s.Rooms.Add(r);
             }
@@ -277,7 +290,7 @@ namespace Maela
                 s.Rooms.Add(r);
             }
             foreach (SpatialRoom r in s.Rooms)
-                structure.Append(r.Name).Append(r.Circle).Append(r.Active).Append(r.Online).Append(r.Checking).Append(r.Members).Append('/').Append(r.Max).Append(r.Picture != null).Append(';');
+                structure.Append(r.Name).Append(r.Circle).Append(r.Active).Append(r.Online).Append(r.Checking).Append(r.Members).Append('/').Append(r.Max).Append(r.Picture != null).Append(SpatialPlace.Format(r.Placed, r.PlaceX, r.PlaceY, r.Size)).Append(';');
 
             if (_friends != null)
             {
@@ -293,8 +306,11 @@ namespace Maela
                     f.WantsToBeFriends = person.State == FriendState.RequestReceived;
                     f.Unread = person.Id == _spatialFriendId ? 0 : person.Unread;
                     _friendCircleOf.TryGetValue(person.Id, out f.Circle);
+                    string place;
+                    if (_friendPlaces.TryGetValue(person.Id, out place))
+                        SpatialPlace.Parse(place, out f.Placed, out f.PlaceX, out f.PlaceY, out f.Size);
                     s.Friends.Add(f);
-                    structure.Append(f.Name).Append(f.Circle).Append(f.Status).Append(f.Unread).Append(';');
+                    structure.Append(f.Name).Append(f.Circle).Append(f.Status).Append(f.Unread).Append(place).Append(';');
                 }
                 s.Friends.Sort(delegate(SpatialFriend a, SpatialFriend b) { return String.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase); });
             }
@@ -310,6 +326,14 @@ namespace Maela
                     c.Id = channel.Id;
                     c.Name = channel.Name;
                     c.IsText = channel.IsText;
+                    ChannelLayout layout = engine.GetChannelLayout(channel.Id);
+                    if (layout != null)
+                    {
+                        c.HasLayout = true;
+                        c.Angle = layout.Angle;
+                        c.Reach = layout.Reach;
+                        c.Size = layout.Size;
+                    }
                     foreach (RoomMemberInfo member in members)
                     {
                         if (member.ChannelId != channel.Id)
@@ -324,10 +348,17 @@ namespace Maela
                         p.ChannelId = member.ChannelId;
                         p.Live = member.IsLocal ? engine.IsSharingScreen : engine.GetLiveStream(member.Id) != null;
                         p.Picture = SpatialPicture(member.IsLocal ? MyPicture() : AvatarImage(member.Id));
+                        MemberExtras extras = _preferences.ShowDecos ? ExtrasFor(member) : null;
+                        if (extras != null)
+                        {
+                            p.Deco = extras.Deco;
+                            p.DecoA = extras.ColourA;
+                            p.DecoB = extras.ColourB;
+                        }
                         c.People.Add(p);
                         if (p.Speaking)
                             talk.Append(p.Id).Append(',');
-                        structure.Append(p.Id).Append(p.Name).Append(p.Muted).Append(p.Deafened).Append(p.Live).Append(p.Picture != null);
+                        structure.Append(p.Id).Append(p.Name).Append(p.Muted).Append(p.Deafened).Append(p.Live).Append(p.Picture != null).Append(p.Deco).Append(p.DecoA).Append(p.DecoB);
                     }
                     s.Channels.Add(c);
                     structure.Append('#').Append(c.Id).Append(c.Name).Append(c.IsText).Append(';');
@@ -346,6 +377,7 @@ namespace Maela
                         line.Who = message.SenderName;
                         line.Picture = SpatialPicture(message.IsLocal ? MyPicture() : AvatarImage(message.SenderId));
                         line.Text = message.Text;
+                        FillAttachments(line, null);
                         line.TimeUtc = message.TimeUtc;
                         line.Note = message.Failed ? "Not sent" : message.Pending ? "Sending…" : null;
                         if (!message.Pending && !message.Failed && message.Sequence != 0)
@@ -377,6 +409,7 @@ namespace Maela
                     line.Who = entry.Mine ? _preferences.DisplayName : theirName;
                     line.Picture = entry.Mine ? s.MyPicture : null;
                     line.Text = entry.Text;
+                    FillAttachments(line, _spatialFriendId);
                     line.TimeUtc = entry.TimeUtc;
                     line.Note = entry.Mine && !entry.Delivered ? "Not delivered yet" : null;
                     line.ReactKey = entry.MessageId;
@@ -391,8 +424,9 @@ namespace Maela
             }
 
             s.StructureKey = structure.ToString();
+            s.LayoutKey = engine == null ? 0 : engine.ChannelLayoutsVersion;
             s.TalkKey = talk.ToString();
-            s.DockKey = s.MyName + s.MyStatus + s.Muted + s.Deafened + s.Noise + s.Running + s.Connected + s.InVoice + s.Sharing + s.Ping + s.LocalChannel + s.RoomName + s.Message + (s.MyPicture != null);
+            s.DockKey = s.MyName + s.MyStatus + s.Muted + s.Deafened + s.Noise + s.Running + s.Connected + s.InVoice + s.Sharing + s.Ping + s.LocalChannel + s.RoomName + s.Message + (s.MyPicture != null) + s.MyDeco + s.MyDecoA + s.MyDecoB;
             return s;
         }
 
@@ -490,8 +524,18 @@ namespace Maela
                 UpdateSelectedRoomUi();
                 CancelEventArgs opening = new CancelEventArgs();
                 RoomMenuOpening(_roomMenu, opening);
-                if (!opening.Cancel)
-                    ShowSpatialMenu(_roomMenu);
+                if (opening.Cancel)
+                    return;
+                if (Math.Abs(room.Size - 1) > 0.005)
+                {
+                    _roomMenu.Items.Add(new ToolStripSeparator());
+                    _roomMenu.Items.Add("Reset size", null, delegate
+                    {
+                        room.Size = 1;
+                        SavedRoomStore.Save(_savedRooms);
+                    });
+                }
+                ShowSpatialMenu(_roomMenu);
             });
         }
 
@@ -546,8 +590,11 @@ namespace Maela
 
         // ----- Circles. Saved as "id|name|hasPosition|x|y;...", with the name escaped. -----
 
-        private List<SpatialCircle> _roomCircles, _friendCircles;
+        // One list for rooms and friends, saved in RoomCircles. Friends' circles used to have their
+        // own list (FriendCircles); its circles are moved into this one the first time it loads.
+        private List<SpatialCircle> _circles;
         private Dictionary<string, string> _friendCircleOf;
+        private Dictionary<string, string> _friendPlaces; // id -> "x,y,size", see SpatialPlace.
 
         private static List<SpatialCircle> ParseCircles(string saved, string mainName)
         {
@@ -564,8 +611,17 @@ namespace Maela
                 circle.HasPosition = parts[2] == "1";
                 Double.TryParse(parts[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out circle.X);
                 Double.TryParse(parts[4], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out circle.Y);
+                if (!(Math.Abs(circle.X) <= 1000000 && Math.Abs(circle.Y) <= 1000000))
+                {
+                    circle.HasPosition = false; // "NaN" or "Infinity": placed afresh.
+                    circle.X = circle.Y = 0;
+                }
                 circles.Add(circle);
             }
+            if (mainName == null)
+                return circles;
+            if (!circles.Exists(delegate(SpatialCircle c) { return c.Id == SpatialCircle.FriendsId; }))
+                circles.Insert(0, new SpatialCircle { Id = SpatialCircle.FriendsId, Name = "Friends" });
             if (!circles.Exists(delegate(SpatialCircle c) { return c.Id == SpatialCircle.MainId; }))
                 circles.Insert(0, new SpatialCircle { Id = SpatialCircle.MainId, Name = mainName });
             if (!circles.Exists(delegate(SpatialCircle c) { return c.Id == SpatialCircle.FavouritesId; }))
@@ -583,10 +639,9 @@ namespace Maela
 
         private void LoadCircles()
         {
-            if (_roomCircles != null)
+            if (_circles != null)
                 return;
-            _roomCircles = ParseCircles(_preferences.RoomCircles, "Rooms");
-            _friendCircles = ParseCircles(_preferences.FriendCircles, "Friends");
+            _circles = ParseCircles(_preferences.RoomCircles, "Rooms");
             _friendCircleOf = new Dictionary<string, string>();
             foreach (string pair in (_preferences.FriendCircleOf ?? String.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
             {
@@ -594,16 +649,42 @@ namespace Maela
                 if (colon > 0)
                     _friendCircleOf[pair.Substring(0, colon)] = pair.Substring(colon + 1);
             }
+            _friendPlaces = new Dictionary<string, string>();
+            foreach (string pair in (_preferences.FriendPlaces ?? String.Empty).Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                int colon = pair.IndexOf(':');
+                if (colon > 0)
+                    _friendPlaces[pair.Substring(0, colon)] = pair.Substring(colon + 1);
+            }
+            if (!String.IsNullOrEmpty(_preferences.FriendCircles))
+            {
+                // Friends' own circles join the one list. Their old places were in the friends tab's
+                // space, so they're placed afresh. Friends in its main circle go to Friends.
+                foreach (SpatialCircle old in ParseCircles(_preferences.FriendCircles, null))
+                {
+                    if (old.Id == SpatialCircle.FavouritesId || old.Id == SpatialCircle.MainId || _circles.Exists(delegate(SpatialCircle c) { return c.Id == old.Id; }))
+                        continue;
+                    old.HasPosition = false;
+                    _circles.Add(old);
+                }
+                foreach (string friend in new List<string>(_friendCircleOf.Keys))
+                    if (_friendCircleOf[friend] == SpatialCircle.MainId) _friendCircleOf.Remove(friend);
+                _preferences.FriendCircles = String.Empty;
+                SaveCircles();
+            }
         }
 
         private void SaveCircles()
         {
-            _preferences.RoomCircles = FormatCircles(_roomCircles);
-            _preferences.FriendCircles = FormatCircles(_friendCircles);
+            _preferences.RoomCircles = FormatCircles(_circles);
             List<string> pairs = new List<string>();
             foreach (KeyValuePair<string, string> pair in _friendCircleOf)
                 pairs.Add(pair.Key + ":" + pair.Value);
             _preferences.FriendCircleOf = String.Join(",", pairs.ToArray());
+            List<string> places = new List<string>();
+            foreach (KeyValuePair<string, string> pair in _friendPlaces)
+                if (pair.Value.Length > 0) places.Add(pair.Key + ":" + pair.Value);
+            _preferences.FriendPlaces = String.Join(";", places.ToArray());
             PreferencesStore.Save(_preferences);
         }
 
@@ -623,6 +704,7 @@ namespace Maela
             SpatialDo(delegate
             {
                 room.Circle = circle == SpatialCircle.MainId ? String.Empty : circle;
+                room.Placed = false;
                 SavedRoomStore.Save(_savedRooms);
             });
         }
@@ -632,20 +714,67 @@ namespace Maela
             SpatialDo(delegate
             {
                 LoadCircles();
-                if (circle == SpatialCircle.MainId)
+                if (circle == SpatialCircle.FriendsId)
                     _friendCircleOf.Remove(id);
                 else
                     _friendCircleOf[id] = circle;
+                SetFriendPlace(id, false, 0, 0, null);
                 SaveCircles();
             });
         }
 
-        internal void SpatialPlaceCircle(bool rooms, string id, double x, double y)
+        /// <summary>A room dropped somewhere in the space: its circle (or none) and its place and size there.</summary>
+        internal void SpatialPlaceRoom(object key, string circle, double x, double y, double size)
+        {
+            SavedRoom room = key as SavedRoom;
+            if (room == null)
+                return;
+            SpatialDo(delegate
+            {
+                room.Circle = circle == SpatialCircle.MainId ? String.Empty : circle;
+                room.Placed = true;
+                room.PlaceX = x;
+                room.PlaceY = y;
+                room.Size = Math.Max(0.6, Math.Min(1.8, size));
+                SavedRoomStore.Save(_savedRooms);
+            });
+        }
+
+        internal void SpatialPlaceFriend(string id, string circle, double x, double y, double size)
         {
             SpatialDo(delegate
             {
                 LoadCircles();
-                SpatialCircle circle = (rooms ? _roomCircles : _friendCircles).Find(delegate(SpatialCircle c) { return c.Id == id; });
+                if (circle == SpatialCircle.FriendsId)
+                    _friendCircleOf.Remove(id);
+                else
+                    _friendCircleOf[id] = circle;
+                SetFriendPlace(id, true, x, y, size);
+                SaveCircles();
+            });
+        }
+
+        /// <summary>A friend's place and size. A null size keeps the one they have.</summary>
+        private void SetFriendPlace(string id, bool placed, double x, double y, double? size)
+        {
+            string old;
+            bool wasPlaced;
+            double ox, oy, oldSize;
+            _friendPlaces.TryGetValue(id, out old);
+            SpatialPlace.Parse(old, out wasPlaced, out ox, out oy, out oldSize);
+            string text = SpatialPlace.Format(placed, x, y, size ?? oldSize);
+            if (text.Length == 0)
+                _friendPlaces.Remove(id);
+            else
+                _friendPlaces[id] = text;
+        }
+
+        internal void SpatialPlaceCircle(string id, double x, double y)
+        {
+            SpatialDo(delegate
+            {
+                LoadCircles();
+                SpatialCircle circle = _circles.Find(delegate(SpatialCircle c) { return c.Id == id; });
                 if (circle == null)
                     return;
                 circle.HasPosition = true;
@@ -655,7 +784,8 @@ namespace Maela
             });
         }
 
-        internal void SpatialNewCircle(bool rooms)
+        /// <summary>A new circle: where you right-clicked in the space, or in the next free spot.</summary>
+        internal void SpatialNewCircle(double? x, double? y)
         {
             SpatialDialog(delegate
             {
@@ -666,23 +796,51 @@ namespace Maela
                 SpatialCircle circle = new SpatialCircle();
                 circle.Id = "c" + DateTime.UtcNow.Ticks.ToString("x");
                 circle.Name = name.Trim();
-                (rooms ? _roomCircles : _friendCircles).Add(circle);
+                if (x.HasValue && y.HasValue)
+                {
+                    circle.HasPosition = true;
+                    circle.X = x.Value;
+                    circle.Y = y.Value;
+                }
+                _circles.Add(circle);
                 SaveCircles();
             });
         }
 
-        internal void SpatialCircleMenu(bool rooms, string id)
+        internal void SpatialCircleMenu(string id)
         {
             SpatialDialog(delegate
             {
                 LoadCircles();
-                List<SpatialCircle> circles = rooms ? _roomCircles : _friendCircles;
+                List<SpatialCircle> circles = _circles;
                 SpatialCircle circle = circles.Find(delegate(SpatialCircle c) { return c.Id == id; });
                 if (circle == null)
                     return;
                 ContextMenuStrip menu = new ContextMenuStrip();
                 menu.Renderer = new ThemedMenuRenderer();
                 menu.ShowImageMargin = false;
+                menu.Items.Add("Tidy this circle", null, delegate
+                {
+                    // Everything in it back to the automatic layout, at its usual size.
+                    foreach (SavedRoom room in _savedRooms)
+                    {
+                        string own = String.IsNullOrEmpty(room.Circle) ? SpatialCircle.MainId : room.Circle;
+                        if (own != id)
+                            continue;
+                        room.Placed = false;
+                        room.Size = 1;
+                    }
+                    SavedRoomStore.Save(_savedRooms);
+                    foreach (string friend in new List<string>(_friendPlaces.Keys))
+                    {
+                        string own;
+                        if (!_friendCircleOf.TryGetValue(friend, out own))
+                            own = SpatialCircle.FriendsId;
+                        if (own == id)
+                            _friendPlaces.Remove(friend);
+                    }
+                    SaveCircles();
+                });
                 menu.Items.Add("Rename circle", null, delegate
                 {
                     string name = TextPrompt.Show(this, "Rename circle", "Circle name", circle.Name);
@@ -695,17 +853,22 @@ namespace Maela
                 {
                     menu.Items.Add("Delete circle", null, delegate
                     {
+                        // Whatever was in it goes back to Rooms or Friends.
                         circles.Remove(circle);
-                        if (rooms)
+                        foreach (SavedRoom room in _savedRooms)
                         {
-                            foreach (SavedRoom room in _savedRooms)
-                                if (room.Circle == id) room.Circle = String.Empty;
-                            SavedRoomStore.Save(_savedRooms);
+                            if (room.Circle != id)
+                                continue;
+                            room.Circle = String.Empty;
+                            room.Placed = false; // Its place was in the circle that's gone.
                         }
-                        else
+                        SavedRoomStore.Save(_savedRooms);
+                        foreach (string friend in new List<string>(_friendCircleOf.Keys))
                         {
-                            foreach (string friend in new List<string>(_friendCircleOf.Keys))
-                                if (_friendCircleOf[friend] == id) _friendCircleOf.Remove(friend);
+                            if (_friendCircleOf[friend] != id)
+                                continue;
+                            _friendCircleOf.Remove(friend);
+                            SetFriendPlace(friend, false, 0, 0, null);
                         }
                         SaveCircles();
                     });
@@ -726,8 +889,24 @@ namespace Maela
                 if (_friendsView == null)
                     return;
                 ContextMenuStrip menu = _friendsView.BuildPersonMenu(id);
-                if (menu != null)
-                    ShowSpatialMenu(menu);
+                if (menu == null)
+                    return;
+                LoadCircles();
+                string place;
+                bool placed;
+                double x, y, size;
+                _friendPlaces.TryGetValue(id, out place);
+                SpatialPlace.Parse(place, out placed, out x, out y, out size);
+                if (Math.Abs(size - 1) > 0.005)
+                {
+                    menu.Items.Add(new ToolStripSeparator());
+                    menu.Items.Add("Reset size", null, delegate
+                    {
+                        SetFriendPlace(id, placed, x, y, 1);
+                        SaveCircles();
+                    });
+                }
+                ShowSpatialMenu(menu);
             });
         }
 
@@ -913,16 +1092,28 @@ namespace Maela
             SpatialDo(delegate
             {
                 VoipEngine engine = _engine;
-                RoomMemberInfo member = FindMember(id);
+                RoomMemberInfo member = id == Maela.SpatialProfile.Mine ? MyMember() : FindMember(id);
                 if (member == null || (engine == null && !member.IsLocal))
                     return;
                 SpatialProfile p = new SpatialProfile();
-                p.Id = member.Id;
+                p.Id = id == Maela.SpatialProfile.Mine ? id : member.Id;
                 p.Name = member.Name;
                 p.IsLocal = member.IsLocal;
                 p.IsHost = member.IsHost;
                 p.ChannelId = member.ChannelId;
                 p.Picture = SpatialPicture(member.IsLocal ? MyPicture() : AvatarImage(member.Id));
+                MemberExtras extras = ExtrasFor(member);
+                if (extras != null)
+                {
+                    p.Banner = extras.Banner;
+                    p.BannerA = extras.ColourA;
+                    p.BannerB = extras.ColourB;
+                    p.BannerPicture = SpatialPicture(BannerImage(member, extras));
+                    if (p.Banner == BannerKind.Picture && p.BannerPicture == null)
+                        p.Banner = BannerKind.Auto;
+                    p.Effect = _preferences.ShowDecos ? extras.Effect : CardEffect.None;
+                    p.Deco = _preferences.ShowDecos ? extras.Deco : PictureDeco.None;
+                }
                 MemberProfile profile = engine == null || member.IsLocal ? null : engine.GetProfile(member.Id);
                 p.Status = member.IsLocal ? _preferences.Status : (profile == null ? String.Empty : profile.Status);
                 if (engine == null || !engine.IsConnected)
@@ -990,6 +1181,84 @@ namespace Maela
                 SetMyStatus(chosen);
                 RefreshShell(_engine);
             });
+        }
+
+        /// <summary>Hosts only: where a channel sits round the room, and how big it is. Everyone sees it live.</summary>
+        internal void SpatialChannelLayout(int channel, double angle, double reach, double size)
+        {
+            SpatialDo(delegate
+            {
+                if (_engine == null || !_engine.IsHost)
+                    return;
+                _engine.SetChannelLayout(channel, angle, reach, size);
+                // Saved with the room once it's been still for a moment, not on every step of a drag.
+                if (_layoutSaveTimer == null)
+                {
+                    _layoutSaveTimer = new Timer();
+                    _layoutSaveTimer.Interval = 800;
+                    _layoutSaveTimer.Tick += delegate
+                    {
+                        _layoutSaveTimer.Stop();
+                        SaveHostedChannelLayout();
+                    };
+                }
+                _layoutSaveTimer.Stop();
+                _layoutSaveTimer.Start();
+            });
+        }
+
+        private Timer _layoutSaveTimer;
+
+        /// <summary>
+        /// A hosted room's channel layout for the rooms file: one "angle,reach,size" per channel, in
+        /// the same order as its channel names (which is the order they get their ids when it
+        /// starts again), separated by ';', with an empty entry for a channel in its usual place.
+        /// </summary>
+        private static string FormatChannelLayout(VoipEngine engine, VoiceChannelInfo[] channels)
+        {
+            StringBuilder text = new StringBuilder();
+            bool any = false;
+            for (int i = 0; i < channels.Length; i++)
+            {
+                if (i > 0)
+                    text.Append(';');
+                ChannelLayout layout = engine.GetChannelLayout(channels[i].Id);
+                if (layout == null)
+                    continue;
+                any = true;
+                text.Append(layout.Angle.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)).Append(',')
+                    .Append(layout.Reach.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)).Append(',')
+                    .Append(layout.Size.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            return any ? text.ToString() : String.Empty;
+        }
+
+        /// <summary>Puts a saved layout back on a room that has just started. Anything unreadable is skipped.</summary>
+        private static void RestoreChannelLayout(VoipEngine engine, string saved)
+        {
+            if (String.IsNullOrEmpty(saved))
+                return;
+            VoiceChannelInfo[] channels = engine.GetChannels();
+            string[] entries = saved.Split(';');
+            for (int i = 0; i < entries.Length && i < channels.Length; i++)
+            {
+                string[] values = entries[i].Split(',');
+                double angle, reach, size;
+                System.Globalization.CultureInfo invariant = System.Globalization.CultureInfo.InvariantCulture;
+                if (values.Length != 3
+                    || !Double.TryParse(values[0], System.Globalization.NumberStyles.Float, invariant, out angle)
+                    || !Double.TryParse(values[1], System.Globalization.NumberStyles.Float, invariant, out reach)
+                    || !Double.TryParse(values[2], System.Globalization.NumberStyles.Float, invariant, out size))
+                    continue;
+                engine.SetChannelLayout(channels[i].Id, angle, reach, size);
+            }
+        }
+
+        /// <summary>Called from the Dynamic window's own thread every frame, so it only reads the engine.</summary>
+        internal float SpatialVoiceLevel(uint id)
+        {
+            VoipEngine engine = _engine;
+            return engine == null ? 0f : engine.GetVoiceLevel(id);
         }
 
         internal void SpatialEditProfile() { SpatialDialog(delegate { ShowEditProfile(); }); }

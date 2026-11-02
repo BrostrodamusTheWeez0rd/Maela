@@ -462,7 +462,7 @@ namespace Maela
     /// HMAC tag (see PacketCipher). Messages are numbered per direction, resent until
     /// acknowledged and kept encrypted on the sender's PC until then.
     /// </summary>
-    internal sealed class FriendService : IDisposable
+    internal sealed partial class FriendService : IDisposable
     {
         private const uint Magic = 0x3152464D; // "MFR1"
         private const byte OuterHello = 1;
@@ -1329,6 +1329,7 @@ namespace Maela
         private void Tick(DateTime now)
         {
             TickCall(now);
+            TickPictures(now);
             List<uint> stale = new List<uint>();
             foreach (KeyValuePair<uint, Handshake> pair in _handshakes)
             {
@@ -1674,6 +1675,8 @@ namespace Maela
                 case InnerMessage: HandleMessage(person, inner); break;
                 case InnerAck: HandleAck(person, inner); break;
                 case InnerCall: HandleCall(person, inner); break;
+                case InnerPictureGet: HandlePictureGet(person, inner); break;
+                case InnerPictureData: HandlePictureData(person, inner); break;
                 case InnerBye:
                     if (person != null && person.State == FriendState.Friend && Object.ReferenceEquals(person.Current, session))
                     {
@@ -1692,6 +1695,8 @@ namespace Maela
         {
             DateTime now = DateTime.UtcNow;
             person.LastSeenUtc = now;
+            if (person.State == FriendState.Friend)
+                ResumePicturesLocked(person); // Back online: anything still missing comes now.
             if (person.State == FriendState.Friend)
             {
                 SendPing(session, now);
@@ -2014,6 +2019,7 @@ namespace Maela
                 entry.MessageId = messageId;
                 ChatOf(person).Add(entry);
                 person.Unread++;
+                PictureAnnounced(person, text);
             }
             Save();
             SendAck(person);

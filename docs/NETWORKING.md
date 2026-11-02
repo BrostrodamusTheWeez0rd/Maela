@@ -96,6 +96,42 @@ authentication, arrives twice, or is older than the 1,024-packet replay window.
   advertised version and inflate to exactly 80×80 or 480×120 RGB565 pixels, at most 16 KB or 128 KB
   compressed. Hosts answer at most 20 requests per member per second. Members save the art with the
   room, so an unchanged piece isn't fetched again.
+- Profile extras (banner, card deco, picture deco) are a family of their own, so older versions
+  never see them: EXTRAS_PUT (29), EXTRAS_ACK (30), EXTRAS_GET (31) and EXTRAS_DATA (32), chunked
+  and acknowledged exactly like profiles, with (member, version) pairs in peer-list section 6. A
+  blob is `[format][banner kind][card deco][picture deco][colour A, 3 bytes][colour B, 3 bytes]`,
+  then, for a picture banner only, 240×80 RGB565 pixels compressed with Deflate. It is at most
+  32,000 bytes; receivers reject unknown kinds or decos, stray bytes, and pixels that don't inflate
+  to exactly 38,400 bytes. Like profiles, each member may change them once every 5 seconds.
+- Channel layout: where the host has put each channel round the room. Peer-list section 7 is
+  `[u8 count]` then, per channel, `[i32 id][u16 angle][u8 reach %][u8 size %]`. Reach is clamped to
+  55–170% and size to 60–180%. While the host drags a channel, the peer list goes out at most every
+  80 ms, so everyone sees it move.
+
+### Chat pictures
+
+Pictures in room chat are a picture format of mæla's own, never an image file: `"MP"`, a version
+byte, width and height (u16 each, at most 1920), then the RGB rows, each with one PNG-style filter
+byte, compressed with Deflate. The sender's PC draws the picture fresh at that size, so nothing else
+from the original file is ever sent. A picture is named by the first 16 bytes of its SHA-256 and is
+at most 6 MB.
+
+| Type | Direction | Contents |
+|---|---|---|
+| 33 PICTURE_OFFER | client → host | id (16), size (4), channel (4), client message id (4) |
+| 34 PICTURE_GET | either way | id (16), first chunk (u16), count (u16, at most 64) |
+| 35 PICTURE_DATA | either way | id (16), size (4), chunk index (u16), up to 1,000 bytes |
+
+- The sender offers; the host pulls the picture in 64-chunk windows, one upload per member at a
+  time and one picture per member every 4 seconds. Chunks only ever answer a request, and only for
+  the picture that was asked for.
+- When it's whole, the host checks that it hashes to its name and inflates to exactly the size its
+  header gives, with known filters only. Only then does it keep the picture and post a chat message
+  of kind 2 (picture). Only the host makes those; a member typing the same text gets plain text.
+- The message's text is `🖼 Sent a picture. Update mæla to see it. [mp1:<id>:<w>x<h>:<bytes>]`,
+  which is all an older version shows. Anyone who sees it pulls the picture from the host the same
+  way and checks it again.
+- Hosts keep up to 96 MB of pictures and members 128 MB, oldest dropped first, while the room runs.
 
 ### Screen sharing
 
@@ -210,6 +246,12 @@ Every datagram starts with magic `MFR1` (4) and a type (1).
   A backup's numbering may be out of date, so a friend who sees a new incarnation starts both
   directions again from 1 and renumbers anything undelivered. Running one key on two PCs at once
   keeps triggering this, so it isn't supported.
+- Pictures: a MESSAGE whose text carries a picture marker (as in rooms). The receiver then pulls the
+  picture from that friend with PICTURE_GET (inner type 8: id, first chunk, count, at most 48) and
+  PICTURE_DATA (inner type 9: id, size, chunk index, up to 1,000 bytes), and checks it the same way.
+  You only answer for pictures you sent that friend, and chunks are only taken from the friend they
+  were asked of. Both sides keep pictures encrypted in `pictures\<id>.bin` beside the chats. Older
+  versions ignore both types.
 - If neither router accepts incoming connections (for example, both behind CGNAT), friends may
   not be able to connect at all.
 
@@ -219,6 +261,12 @@ Every datagram starts with magic `MFR1` (4) and a type (1).
 - Voice detection: a frame is sent only if it is loud enough (adaptive noise floor) *and*
   pitched like a voice (autocorrelation, 70–400 Hz), so typing, clicks and bumps alone send
   nothing. A 400 ms tail and 60 ms of pre-roll keep word starts and ends intact.
+- With the Strong noise filter (on by default), RNNoise cleans each 10 ms of audio (480 samples at
+  48 kHz) and reports how likely it is to be speech. A frame is then sent only if it is loud enough
+  *and* at least 50% likely to be speech, so noise alone never opens the mic. If the filter averages
+  more than 6 ms per frame, mæla switches back to the lighter filter on its own.
+- The Dynamic layout's waveform lines are drawn from the voice each PC already receives; nothing
+  extra is sent for them.
 - Receivers rebuild one or two lost packets from FEC or concealment, and keep a 40 ms jitter
   buffer at the start of each burst of speech, capped at 200 ms of queued audio.
 - About 55–65 kbps per active speaker including all headers, versus ~800 kbps for the old

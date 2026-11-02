@@ -52,9 +52,11 @@ or plays; it is never treated as a file or a command.
 | Break into your PC with a crafted video stream | Contained, with one exception | Streams are decoded in a separate viewer at Low integrity inside a restricted job: no writing to your files, no starting programs, no clipboard. **Exception:** at 1080p and above, by default, decoding happens on your graphics card, and the sandbox protects less against a bug in the graphics driver. mæla checks the stream first and allows only the kind of video its own encoders make. To keep all decoding on the processor, choose Never under Settings > App. |
 | See your Windows username, file names or folders | No | Never sent. Your display name starts as your Windows account name; change it in Settings. |
 | Get the location or camera details from your profile picture | No | Your PC turns the picture into an 80×80 pixel copy; only those pixels are sent. |
-| Send you a booby-trapped image | No | Pictures, including a room's picture and banner, arrive as plain pixels. mæla never runs an image decoder on anything another person sent. |
+| Send you a booby-trapped image | No | Pictures, including a room's picture and banner, profile banners and pictures in chat, arrive as plain pixels. mæla never runs an image decoder on anything another person sent; it only unpacks pixels with its own small code, which stops at exactly the size the picture claims. |
+| Get the location or camera details from a picture you send in chat | No | Your PC draws the picture fresh from its pixels, at up to 1920 pixels across, and sends only that. Nothing else from the file, including its name, is sent. |
+| Post a picture that isn't what it says | No | A picture is named by its SHA-256 hash. The host pulls it in, checks the hash and that it unpacks exactly, and only then posts it; everyone checks again on arrival. Only the host can make a picture message. |
 | Crash or freeze your mæla with bad data | Designed not to | Every message type has size limits and strict checks; bad data is dropped. `tests/ProfileTests.cs` and `tests/SecurityTests.cs` send random, oversized, inconsistent and "zip bomb" data at a real room on every build. |
-| Flood the room | Limited | Chat and profile changes are rate-limited per person; the host can kick or ban. |
+| Flood the room | Limited | Chat, pictures, profile and banner changes are rate-limited per person, and the host keeps a fixed amount of pictures; the host can kick or ban. |
 | Pretend to be the host | No | The host's key is checked against the room code. |
 | Host your saved room themselves | No | Only the PC holding that room's key can host it, and that key never leaves it. |
 
@@ -124,7 +126,11 @@ What it doesn't protect:
 - Because only your Windows account can decrypt the file, saved rooms don't move to another PC or
   survive reinstalling Windows. mæla keeps a file it can't open as `rooms-v3.unreadable` and says so.
 - Your friend key, friends list, their last known addresses and queued messages are in
-  `friends-v1.dat`, and each chat is in its own `friend-<id>.dat`. All are encrypted the same way.
+  `friends-v1.dat`, and each chat is in its own `friend-<id>.dat`. Pictures sent and received in
+  friend chats are in `pictures\<id>.bin` beside them. All are encrypted the same way, and a
+  picture is checked against its hash again each time it's read back.
+- Pictures in room chats are kept in memory only while the room runs, and go on disk only if you
+  save one yourself.
 - `settings.txt` is not encrypted. It holds preferences such as your display name and status.
 
 ## Downloaded assets
@@ -135,6 +141,11 @@ What it doesn't protect:
   source is refused. Files are checked again on every launch, and a file that changes on disk
   is ignored.
 - These downloads are images only. The only code mæla ever downloads is its own update (below).
+- The fonts and the RNNoise noise filter's model are built into `Maela.exe`, never downloaded.
+  Fonts are unpacked to `%LocalAppData%\Maela\Fonts` and checked against their SHA-256 hashes
+  before use. The noise filter runs entirely on your PC and learns, stores and sends nothing.
+- YouTube links in chat load nothing from YouTube unless you click Show preview; Play opens the
+  link in your browser.
 - First-run setup lists everything mæla uses or downloads, with licenses, before anything is
   fetched. Nothing else is downloaded without asking.
 
@@ -153,6 +164,10 @@ What it doesn't protect:
   including the 1,000-iteration test. HKDF is checked against RFC 5869.
 - `tests/SecurityTests.cs` attacks a real host over the network (eavesdropping, wrong keys,
   wrong passwords, forged, bit-flipped and replayed packets) on every CI run.
+- `tests/ProfileTests.cs` sends random, malformed and "zip bomb" profiles, banners and decos at
+  a real room. `tests/ChatTests.cs` and `tests/FriendTests.cs` send pictures that don't match
+  their name, don't unpack exactly or were never asked for, and check none is kept or shown, and
+  that a friend can't fetch a picture that wasn't sent to them.
 - `tests/StreamTests.cs` checks screen-share keys, direct and relayed paths, loss recovery,
   and that the host relays only between people it introduced. `tests/CodecTests.cs` checks
   OpenH264's pinned hashes, end-to-end video, and that the viewer sandbox really runs at Low

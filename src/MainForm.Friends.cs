@@ -126,6 +126,8 @@ namespace Maela
             _friendsView.ChangeStatus = SetMyStatus;
             _friendsView.Call = StartFriendCall;
             _friendsView.ReturnToCall = ShowRoomsView;
+            _friendsView.OpenFromChat = delegate(string text) { OpenFromChat(text, String.Empty); };
+            _friendsView.PastePicture = delegate(string id) { return PastePicture(id, 0); };
             _friendsView.Dock = DockStyle.Fill;
             _friendsView.Visible = false;
             Controls.Add(_friendsView);
@@ -817,6 +819,10 @@ namespace Maela
 
         public string SelectedId { get { return _selectedId; } }
 
+        /// <summary>The app opens a clicked picture or YouTube link from a message's text, and sends a pasted picture.</summary>
+        public Action<string> OpenFromChat;
+        public Func<string, bool> PastePicture;
+
         /// <summary>Your friend code and backup buttons, which the app shows in its sidebar.</summary>
         public Control ListPanel { get { return _left; } }
         private readonly FlatButton _callButton = new FlatButton();
@@ -957,6 +963,12 @@ namespace Maela
             _input.Placeholder = "Message";
             _input.Box.KeyDown += delegate(object s, KeyEventArgs e)
             {
+                if (e.KeyCode == Keys.V && e.Control && _selectedId != null && PastePicture != null && PastePicture(_selectedId))
+                {
+                    // A picture on the clipboard, such as a screenshot, is sent as a picture.
+                    e.SuppressKeyPress = true;
+                    return;
+                }
                 if (e.KeyCode == Keys.Enter)
                 {
                     e.SuppressKeyPress = true;
@@ -989,6 +1001,7 @@ namespace Maela
             _chatHost.Dock = DockStyle.Fill;
             _chatHost.Controls.Add(_chat);
             _chatView.Dock = DockStyle.Fill;
+            _chatView.OpenRequested += delegate(string text) { if (OpenFromChat != null) OpenFromChat(text); };
             _chatView.ReactRequested += delegate(ulong messageId, string emoji)
             {
                 if (_selectedId != null)

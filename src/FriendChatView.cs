@@ -31,6 +31,9 @@ namespace Maela
         /// <summary>The person clicked a reaction: the message's id, then the emoji.</summary>
         public event Action<ulong, string> ReactRequested;
 
+        /// <summary>A message with a picture or a YouTube link was clicked: its text.</summary>
+        public event Action<string> OpenRequested;
+
         private sealed class Row
         {
             public FriendChatEntry Entry;
@@ -143,7 +146,7 @@ namespace Maela
                 return;
             row.LayoutWidth = width;
             row.Runs = new List<Run>();
-            List<object> tokens = EmojiPack.Tokenize(row.Entry.Text);
+            List<object> tokens = EmojiPack.Tokenize(MainForm.ChatRowText(row.Entry.Text));
             int emojiCount = 0;
             bool onlyEmoji = true;
             foreach (object token in tokens)
@@ -380,6 +383,12 @@ namespace Maela
                 _menu.Show(this, e.Location);
                 return;
             }
+            if (e.Button == MouseButtons.Left && (row.Entry.MessageId == 0 || !row.Entry.Delivered))
+            {
+                if (OpenRequested != null)
+                    OpenRequested(row.Entry.Text); // Such as your own picture, before it's delivered.
+                return;
+            }
             if (e.Button != MouseButtons.Left || row.Entry.MessageId == 0 || !row.Entry.Delivered)
                 return;
             if (ReactRect(GetItemRectangle(index)).Contains(e.Location))
@@ -396,6 +405,8 @@ namespace Maela
                     return;
                 }
             }
+            if (OpenRequested != null)
+                OpenRequested(row.Entry.Text); // A picture or a YouTube link.
         }
 
         private void Raise(ulong messageId, string emoji)

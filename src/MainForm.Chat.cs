@@ -406,6 +406,13 @@ namespace Maela
 
         private void ChatInputKeyDown(object sender, KeyEventArgs e)
         {
+            if (e.KeyCode == Keys.V && e.Control && PastePicture(null, 0))
+            {
+                // A picture on the clipboard, such as a screenshot, is sent as a picture.
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
             if (e.KeyCode != Keys.Enter || e.Shift)
                 return;
             e.Handled = true;
@@ -471,7 +478,7 @@ namespace Maela
                 return;
             row.LayoutWidth = width;
             row.Runs = new List<TextRun>();
-            List<object> tokens = EmojiPack.Tokenize(row.Message.Text);
+            List<object> tokens = EmojiPack.Tokenize(ChatRowText(row.Message.Text));
             bool jumbo = IsJumbo(tokens);
             int emojiSize = jumbo ? JumboEmoji : InlineEmoji;
             int fontHeight = Ui.Body.Height;
@@ -743,6 +750,7 @@ namespace Maela
                     return;
                 }
             }
+            OpenFromChat(row.Message.Text, null); // A picture or a YouTube link.
         }
 
         private void ShowEmojiPickerAt(Point listPoint, ChatMessage reactTo)

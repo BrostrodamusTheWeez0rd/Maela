@@ -20,7 +20,10 @@ namespace Maela
         private int _lastProfilesVersion = -1;
         private VoipEngine _profileSentTo;
         private byte[] _myPicture = ProfileStore.LoadPicture();
+        private byte[] _myBanner = ProfileStore.LoadBanner();
         private Bitmap _myPictureBitmap;
+        private Bitmap _myBannerBitmap;
+        private readonly Dictionary<uint, CachedAvatar> _bannerCache = new Dictionary<uint, CachedAvatar>();
         private ProfileCard _openCard;
 
         /// <summary>A member's picture, or null to draw their initial.</summary>
@@ -54,7 +57,56 @@ namespace Maela
                     c.Picture.Dispose();
             }
             _avatarCache.Clear();
+            foreach (CachedAvatar c in _bannerCache.Values)
+            {
+                if (c.Picture != null)
+                    c.Picture.Dispose();
+            }
+            _bannerCache.Clear();
             _avatarCacheEngine = engine;
+        }
+
+        /// <summary>Someone's banner and card effect: yours from your settings, anyone else's as shared. Null for none.</summary>
+        private MemberExtras ExtrasFor(RoomMemberInfo member)
+        {
+            if (member.IsLocal)
+            {
+                MemberExtras mine = new MemberExtras();
+                mine.Banner = _preferences.Banner == BannerKind.Picture && _myBanner == null ? BannerKind.Auto : _preferences.Banner;
+                mine.ColourA = _preferences.BannerColourA;
+                mine.ColourB = _preferences.BannerColourB;
+                mine.Pixels = mine.Banner == BannerKind.Picture ? _myBanner : null;
+                mine.Effect = _preferences.CardEffect;
+                mine.Deco = _preferences.PictureDeco;
+                return mine;
+            }
+            VoipEngine engine = _engine;
+            return engine == null ? null : engine.GetExtras(member.Id);
+        }
+
+        /// <summary>The banner picture from someone's extras, or null.</summary>
+        private Image BannerImage(RoomMemberInfo member, MemberExtras extras)
+        {
+            if (extras == null || extras.Banner != BannerKind.Picture || extras.Pixels == null)
+                return null;
+            if (member.IsLocal)
+            {
+                if (_myBannerBitmap == null)
+                    _myBannerBitmap = ProfilePicture.ToBitmap(extras.Pixels, VoipEngine.BannerWidth, VoipEngine.BannerHeight);
+                return _myBannerBitmap;
+            }
+            if (!Object.ReferenceEquals(_engine, _avatarCacheEngine))
+                ClearAvatarCache(_engine);
+            CachedAvatar cached;
+            if (_bannerCache.TryGetValue(member.Id, out cached) && cached.Version == extras.Version)
+                return cached.Picture;
+            if (cached != null && cached.Picture != null)
+                cached.Picture.Dispose();
+            cached = new CachedAvatar();
+            cached.Version = extras.Version;
+            cached.Picture = ProfilePicture.ToBitmap(extras.Pixels, VoipEngine.BannerWidth, VoipEngine.BannerHeight);
+            _bannerCache[member.Id] = cached;
+            return cached.Picture;
         }
 
         private Image MyPicture()
@@ -75,9 +127,21 @@ namespace Maela
             if (!changed && Object.ReferenceEquals(engine, _profileSentTo))
                 return;
             _profileSentTo = engine;
+            SendExtrasToEngine(engine);
             if (_myPicture == null && String.IsNullOrEmpty(_preferences.Status))
                 return; // Nothing to share.
             engine.SetLocalProfile(_preferences.Status, _myPicture);
+        }
+
+        /// <summary>Your banner and card effect, if you've set either.</summary>
+        private void SendExtrasToEngine(VoipEngine engine)
+        {
+            BannerKind banner = _preferences.Banner;
+            if (banner == BannerKind.Picture && _myBanner == null)
+                banner = BannerKind.Auto;
+            if (banner == BannerKind.Auto && _preferences.CardEffect == CardEffect.None && _preferences.PictureDeco == PictureDeco.None)
+                return; // Nothing to share.
+            engine.SetLocalExtras(banner, _preferences.BannerColourA, _preferences.BannerColourB, banner == BannerKind.Picture ? _myBanner : null, _preferences.CardEffect, _preferences.PictureDeco);
         }
 
         /// <summary>UI timer: redraw avatars when profiles arrive or change.</summary>
@@ -118,7 +182,9 @@ namespace Maela
                 state = "In the room";
 
             FriendStatus? myStatus = member.IsLocal && _friends != null ? _friends.Status : (FriendStatus?)null;
-            ProfileCard card = new ProfileCard(member, member.IsLocal ? MyPicture() : AvatarImage(member.Id), status, state, engine, member.IsLocal, myStatus);
+            MemberExtras extras = ExtrasFor(member);
+            ProfileCard card = new ProfileCard(member, member.IsLocal ? MyPicture() : AvatarImage(member.Id), status, state, engine, member.IsLocal, myStatus,
+                extras, BannerImage(member, extras), _preferences.ShowDecos);
             card.StatusChosen += delegate(FriendStatus chosen)
             {
                 card.Close();
@@ -154,7 +220,7 @@ namespace Maela
 
         private void ShowEditProfile()
         {
-            using (EditProfileDialog dialog = new EditProfileDialog(_preferences.DisplayName, _preferences.Status, _myPicture))
+            using (EditProfileDialog dialog = new EditProfileDialog(_preferences.DisplayName, _preferences.Status, _myPicture, _preferences, _myBanner))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK)
                     return;
@@ -169,9 +235,30 @@ namespace Maela
                     _myPictureBitmap = null;
                 }
                 ProfileStore.SavePicture(_myPicture);
+                bool extrasChanged = dialog.Banner != _preferences.Banner || dialog.BannerColourA != _preferences.BannerColourA || dialog.BannerColourB != _preferences.BannerColourB
+                    || dialog.Effect != _preferences.CardEffect || dialog.Deco != _preferences.PictureDeco || !Object.ReferenceEquals(dialog.BannerPicture, _myBanner);
+                _preferences.Banner = dialog.Banner;
+                _preferences.BannerColourA = dialog.BannerColourA;
+                _preferences.BannerColourB = dialog.BannerColourB;
+                _preferences.CardEffect = dialog.Effect;
+                _preferences.PictureDeco = dialog.Deco;
+                if (!Object.ReferenceEquals(_myBanner, dialog.BannerPicture) && _myBannerBitmap != null)
+                {
+                    _myBannerBitmap.Dispose();
+                    _myBannerBitmap = null;
+                }
+                _myBanner = dialog.BannerPicture;
+                ProfileStore.SaveBanner(_myBanner);
                 PreferencesStore.Save(_preferences);
                 if (_engine != null && _engine.IsRunning)
+                {
                     _engine.SetLocalProfile(_preferences.Status, _myPicture);
+                    if (extrasChanged)
+                    {
+                        BannerKind banner = _preferences.Banner == BannerKind.Picture && _myBanner == null ? BannerKind.Auto : _preferences.Banner;
+                        _engine.SetLocalExtras(banner, _preferences.BannerColourA, _preferences.BannerColourB, banner == BannerKind.Picture ? _myBanner : null, _preferences.CardEffect, _preferences.PictureDeco);
+                    }
+                }
                 _userBar.Picture = MyPicture();
                 RefreshShell(_engine);
                 Invalidate(true);
@@ -187,12 +274,21 @@ namespace Maela
             get { return Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Maela"), "picture.bin"); }
         }
 
-        public static byte[] LoadPicture()
+        private static string BannerPath
+        {
+            get { return Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Maela"), "banner.bin"); }
+        }
+
+        public static byte[] LoadPicture() { return Load(PicturePath, VoipEngine.AvatarRawBytes); }
+        public static void SavePicture(byte[] pixels) { Save(PicturePath, pixels); }
+        public static byte[] LoadBanner() { return Load(BannerPath, VoipEngine.BannerRawBytes); }
+        public static void SaveBanner(byte[] pixels) { Save(BannerPath, pixels); }
+
+        private static byte[] Load(string path, int size)
         {
             try
             {
-                string path = PicturePath;
-                if (!File.Exists(path) || new FileInfo(path).Length != VoipEngine.AvatarRawBytes)
+                if (!File.Exists(path) || new FileInfo(path).Length != size)
                     return null;
                 return File.ReadAllBytes(path);
             }
@@ -202,11 +298,10 @@ namespace Maela
             }
         }
 
-        public static void SavePicture(byte[] pixels)
+        private static void Save(string path, byte[] pixels)
         {
             try
             {
-                string path = PicturePath;
                 if (pixels == null)
                 {
                     if (File.Exists(path))
@@ -237,14 +332,27 @@ namespace Maela
         private readonly TrackBar _volume = new TrackBar();
         private readonly ToggleSwitch _mute = new ToggleSwitch();
         private readonly Label _volumeValue = new Label();
+        private readonly MemberExtras _extras;
+        private readonly Image _banner;
+        private readonly int _bannerHeight;
+        private readonly CardEffect _effect;
+        private readonly PictureDeco _deco;
+        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
         private bool _closing;
 
-        public ProfileCard(RoomMemberInfo member, Image picture, string status, string state, VoipEngine engine, bool isLocal, FriendStatus? myStatus)
+        public ProfileCard(RoomMemberInfo member, Image picture, string status, string state, VoipEngine engine, bool isLocal, FriendStatus? myStatus,
+            MemberExtras extras, Image banner, bool showEffect)
         {
             _member = member;
             _picture = picture;
             _status = status ?? String.Empty;
             _state = state;
+            _extras = extras;
+            _banner = banner;
+            // A chosen banner gets more room, so a picture isn't just a strip.
+            _bannerHeight = extras != null && extras.Banner != BannerKind.Auto ? 84 : 56;
+            _effect = showEffect && extras != null ? extras.Effect : CardEffect.None;
+            _deco = showEffect && extras != null ? extras.Deco : PictureDeco.None;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
@@ -255,7 +363,7 @@ namespace Maela
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
             int width = 300;
-            int y = 158 + (_status.Length > 0 ? 22 : 0);
+            int y = 158 + (_bannerHeight - 56) + (_status.Length > 0 ? 22 : 0);
 
             if (isLocal && myStatus.HasValue)
             {
@@ -379,6 +487,14 @@ namespace Maela
             }
 
             ClientSize = new Size(width, y + 6);
+            if (_effect != CardEffect.None || _deco != PictureDeco.None)
+            {
+                Timer frames = new Timer();
+                frames.Interval = 33;
+                frames.Tick += delegate { Invalidate(false); };
+                frames.Start();
+                FormClosed += delegate { frames.Dispose(); };
+            }
             Deactivate += delegate { if (!_closing) { _closing = true; BeginInvoke((MethodInvoker)Close); } };
             KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) Close(); };
         }
@@ -399,14 +515,21 @@ namespace Maela
             Theme t = Theme.Current;
             Graphics g = e.Graphics;
             g.Clear(t.Surface);
-            // Banner in the person's colour, avatar overlapping it.
-            using (SolidBrush banner = new SolidBrush(Color.FromArgb(150, Ui.NameColor(_member.Name))))
-                g.FillRectangle(banner, 0, 0, Width, 56);
+            // Their banner (or their name's colour), avatar overlapping it.
+            int shift = _bannerHeight - 56;
+            Rectangle banner = new Rectangle(0, 0, Width, _bannerHeight);
+            if (_extras == null)
+                CardEffects.PaintBanner(g, banner, BannerKind.Auto, 0, 0, null, Ui.NameColor(_member.Name));
+            else
+                CardEffects.PaintBanner(g, banner, _extras.Banner, _extras.ColourA, _extras.ColourB, _banner, Ui.NameColor(_member.Name));
+            // The card deco goes behind the picture, the words and the buttons.
+            if (_effect != CardEffect.None)
+                CardEffects.PaintEffect(g, _effect, ClientSize, banner, new PointF(54, 60 + shift), 40, _extras.ColourA, _extras.ColourB, (int)_member.Id, _clock.Elapsed.TotalSeconds);
             using (SolidBrush ring = new SolidBrush(t.Surface))
-                g.FillEllipse(ring, 12, 18, 84, 84);
-            Ui.DrawAvatar(g, new Rectangle(16, 22, 76, 76), _member.Name, false, t.Surface, _picture);
+                g.FillEllipse(ring, 12, 18 + shift, 84, 84);
+            Ui.DrawAvatar(g, new Rectangle(16, 22 + shift, 76, 76), _member.Name, false, t.Surface, _picture);
 
-            int nameY = 108;
+            int nameY = 108 + shift;
             Size nameSize = Ui.Measure(g, _member.Name, Ui.Heading);
             Ui.DrawText(g, _member.Name, Ui.Heading, new Rectangle(16, nameY, Width - 60, 30), t.Text, TextFormatFlags.Left);
             if (_member.IsHost)
@@ -418,28 +541,44 @@ namespace Maela
                 y += 22;
             }
             Ui.DrawText(g, _state, Ui.Small, new Rectangle(16, y, Width - 32, 16), t.Muted, TextFormatFlags.Left);
+            if (_deco != PictureDeco.None)
+                CardEffects.PaintDeco(g, _deco, new PointF(54, 60 + shift), 40, _extras.ColourA, _extras.ColourB, _clock.Elapsed.TotalSeconds);
 
             using (Pen border = new Pen(t.Line))
                 g.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
         }
     }
 
-    /// <summary>Edit your name, status and picture.</summary>
+    /// <summary>Edit your name, status, picture, banner and card effect.</summary>
     internal sealed class EditProfileDialog : ThemedDialog
     {
         private readonly RoundField _name;
         private readonly RoundField _status;
         private readonly PictureBoxRound _preview = new PictureBoxRound();
+        private readonly CardPreview _card = new CardPreview();
+        private readonly List<FlatButton> _kindButtons = new List<FlatButton>();
+        private readonly List<FlatButton> _effectButtons = new List<FlatButton>();
+        private readonly List<FlatButton> _decoButtons = new List<FlatButton>();
+        private readonly FlatButton _colourA = new FlatButton();
+        private readonly FlatButton _colourB = new FlatButton();
         private byte[] _picture;
+        private byte[] _bannerPicture;
 
         public string DisplayName { get { return _name.Box.Text; } }
         public string Status { get { return _status.Box.Text; } }
         public byte[] Picture { get { return _picture; } }
+        public BannerKind Banner { get { return _card.Banner; } }
+        public int BannerColourA { get { return _card.ColourA; } }
+        public int BannerColourB { get { return _card.ColourB; } }
+        public byte[] BannerPicture { get { return _bannerPicture; } }
+        public CardEffect Effect { get { return _card.Effect; } }
+        public PictureDeco Deco { get { return _card.Deco; } }
 
-        public EditProfileDialog(string name, string status, byte[] picture) : base("Edit profile", 460, 470)
+        public EditProfileDialog(string name, string status, byte[] picture, AppPreferences preferences, byte[] bannerPicture) : base("Edit profile", 520, 826)
         {
             _picture = picture;
-            AddHeading("Your profile", "Your picture and status are shared with people in rooms you join.");
+            _bannerPicture = bannerPicture;
+            AddHeading("Your profile", "Your picture, status, banner and decos are shared with people in rooms you join.");
 
             _preview.SetBounds(Margin_X, Cursor_Y, 96, 96);
             _preview.NameForInitial = name;
@@ -462,6 +601,8 @@ namespace Maela
                 _picture = null;
                 _preview.Picture = null;
                 _preview.Invalidate();
+                _card.Picture = null;
+                _card.Invalidate();
             };
             Controls.Add(remove);
             Cursor_Y += 112;
@@ -470,10 +611,89 @@ namespace Maela
             _status = AddField("Status (optional, up to " + VoipEngine.MaxStatusChars + " characters)", status, false);
             _status.Box.MaxLength = VoipEngine.MaxStatusChars;
             _name.Box.MaxLength = 32;
+            _name.Box.TextChanged += delegate { _card.PersonName = _name.Box.Text; _card.Invalidate(); };
+            _status.Box.TextChanged += delegate { _card.Status = _status.Box.Text; _card.Invalidate(); };
 
-            Label note = AddText("Only a small copy of the picture is shared, never the original file or its details (like location).", Theme.Current.Muted, ClientSize.Width - Margin_X * 2);
+            // The card as others will see it, with the banner choices beside it.
+            AddFieldLabel("Profile card", Margin_X, Cursor_Y);
+            Cursor_Y += 22;
+            _card.PersonName = name ?? String.Empty;
+            _card.Status = status ?? String.Empty;
+            _card.Picture = _preview.Picture;
+            _card.Banner = preferences.Banner == BannerKind.Picture && bannerPicture == null ? BannerKind.Auto : preferences.Banner;
+            _card.ColourA = preferences.BannerColourA;
+            _card.ColourB = preferences.BannerColourB;
+            _card.BannerPicture = bannerPicture == null ? null : ProfilePicture.ToBitmap(bannerPicture, VoipEngine.BannerWidth, VoipEngine.BannerHeight);
+            _card.Effect = preferences.CardEffect;
+            _card.Deco = preferences.PictureDeco;
+            _card.SetBounds(Margin_X, Cursor_Y, 300, 150);
+            Controls.Add(_card);
+
+            string[] kinds = { "Name colour", "Colour", "Gradient", "Picture" };
+            for (int i = 0; i < kinds.Length; i++)
+            {
+                BannerKind kind = (BannerKind)i;
+                FlatButton b = new FlatButton();
+                b.Text = kinds[i];
+                b.SetBounds(Margin_X + 316, Cursor_Y + i * 39, ClientSize.Width - Margin_X * 2 - 316, 34);
+                b.Click += delegate { PickBanner(kind); };
+                Controls.Add(b);
+                _kindButtons.Add(b);
+            }
+            Cursor_Y += 160;
+
+            _colourA.Text = "First colour";
+            _colourA.SetBounds(Margin_X, Cursor_Y, 146, 34);
+            _colourA.Click += delegate { int c; if (PickColour(_card.ColourA, out c)) { _card.ColourA = c; _card.Invalidate(); } };
+            Controls.Add(_colourA);
+            _colourB.Text = "Second colour";
+            _colourB.SetBounds(Margin_X + 154, Cursor_Y, 146, 34);
+            _colourB.Click += delegate { int c; if (PickColour(_card.ColourB, out c)) { _card.ColourB = c; _card.Invalidate(); } };
+            Controls.Add(_colourB);
+            FlatButton bannerFile = new FlatButton();
+            bannerFile.Text = "Banner picture…";
+            bannerFile.SetBounds(Margin_X + 316, Cursor_Y, ClientSize.Width - Margin_X * 2 - 316, 34);
+            bannerFile.Click += delegate { ChooseBanner(); };
+            Controls.Add(bannerFile);
+            Cursor_Y += 46;
+
+            // Two decos: one on the card, one around your picture wherever you appear.
+            AddFieldLabel("Card deco", Margin_X, Cursor_Y);
+            Cursor_Y += 22;
+            int count = CardEffects.Cards.Length, gap = 6;
+            int width = (ClientSize.Width - Margin_X * 2 - gap * (count - 1)) / count;
+            for (int i = 0; i < count; i++)
+            {
+                CardEffect effect = CardEffects.Cards[i];
+                FlatButton b = new FlatButton();
+                b.Text = CardEffects.Name(effect);
+                b.SetBounds(Margin_X + i * (width + gap), Cursor_Y, width, 34);
+                b.Click += delegate { _card.Effect = effect; ShowChoices(); };
+                Controls.Add(b);
+                _effectButtons.Add(b);
+            }
+            Cursor_Y += 46;
+            AddFieldLabel("Picture deco", Margin_X, Cursor_Y);
+            Cursor_Y += 22;
+            for (int i = 0; i < CardEffects.Decos.Length; i++)
+            {
+                PictureDeco deco = CardEffects.Decos[i];
+                FlatButton b = new FlatButton();
+                b.Text = CardEffects.Name(deco);
+                b.SetBounds(Margin_X + i * (width + gap), Cursor_Y, width, 34);
+                b.Click += delegate { _card.Deco = deco; ShowChoices(); };
+                Controls.Add(b);
+                _decoButtons.Add(b);
+            }
+            Cursor_Y += 46;
+
+            Label note = AddText("Only small copies of your pictures are shared, never the original files or their details (like location). People see your decos if they have Dynamic effects on.", Theme.Current.Muted, ClientSize.Width - Margin_X * 2);
             note.Font = Ui.Small;
+            note.Height = TextRenderer.MeasureText(note.Text, note.Font, new Size(note.Width, 0), TextFormatFlags.WordBreak).Height;
 
+            ShowChoices();
+            // Fit the window to what's in it, then put the buttons underneath.
+            ClientSize = new Size(ClientSize.Width, note.Bottom + 82);
             AddButtons(Button("Cancel", DialogResult.Cancel), Button("Save", DialogResult.OK));
         }
 
@@ -483,6 +703,73 @@ namespace Maela
             b.Text = text;
             b.DialogResult = result;
             return b;
+        }
+
+        private void PickBanner(BannerKind kind)
+        {
+            if (kind == BannerKind.Picture && _bannerPicture == null)
+            {
+                ChooseBanner(); // Picks the kind too, once a picture is chosen.
+                return;
+            }
+            _card.Banner = kind;
+            ShowChoices();
+        }
+
+        /// <summary>The chosen banner and effect stand out; the colours only when something uses them.</summary>
+        private void ShowChoices()
+        {
+            for (int i = 0; i < _kindButtons.Count; i++)
+                _kindButtons[i].Look = (BannerKind)i == _card.Banner ? ButtonLook.Soft : ButtonLook.Secondary;
+            for (int i = 0; i < _effectButtons.Count; i++)
+                _effectButtons[i].Look = CardEffects.Cards[i] == _card.Effect ? ButtonLook.Soft : ButtonLook.Secondary;
+            for (int i = 0; i < _decoButtons.Count; i++)
+                _decoButtons[i].Look = CardEffects.Decos[i] == _card.Deco ? ButtonLook.Soft : ButtonLook.Secondary;
+            bool effect = _card.Effect != CardEffect.None || _card.Deco != PictureDeco.None;
+            _colourA.Enabled = _card.Banner == BannerKind.Colour || _card.Banner == BannerKind.Gradient || effect;
+            _colourB.Enabled = _card.Banner == BannerKind.Gradient || effect;
+            _colourA.Invalidate();
+            _colourB.Invalidate();
+            _card.Animate(effect);
+            _card.Invalidate();
+        }
+
+        private bool PickColour(int current, out int picked)
+        {
+            picked = current;
+            using (ColorDialog dialog = new ColorDialog())
+            {
+                dialog.FullOpen = true;
+                dialog.Color = CardEffects.ToColor(current);
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                    return false;
+                picked = (dialog.Color.R << 16) | (dialog.Color.G << 8) | dialog.Color.B;
+                return true;
+            }
+        }
+
+        private void ChooseBanner()
+        {
+            using (OpenFileDialog open = new OpenFileDialog())
+            {
+                open.Title = "Choose a banner picture";
+                open.Filter = "Pictures|*.png;*.jpg;*.jpeg;*.bmp;*.gif|All files|*.*";
+                if (open.ShowDialog(this) != DialogResult.OK)
+                    return;
+                try
+                {
+                    _bannerPicture = ProfilePicture.FromFile(open.FileName, VoipEngine.BannerWidth, VoipEngine.BannerHeight);
+                    if (_card.BannerPicture != null)
+                        _card.BannerPicture.Dispose();
+                    _card.BannerPicture = ProfilePicture.ToBitmap(_bannerPicture, VoipEngine.BannerWidth, VoipEngine.BannerHeight);
+                    _card.Banner = BannerKind.Picture;
+                    ShowChoices();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex is InvalidOperationException ? ex.Message : "That file couldn't be opened as a picture.", "Banner", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
         }
 
         private void ChoosePicture()
@@ -498,12 +785,74 @@ namespace Maela
                     _picture = ProfilePicture.FromFile(open.FileName);
                     _preview.Picture = ProfilePicture.ToBitmap(_picture);
                     _preview.Invalidate();
+                    _card.Picture = _preview.Picture;
+                    _card.Invalidate();
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show(this, ex is InvalidOperationException ? ex.Message : "That file couldn't be opened as a picture.", "Profile picture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _card.Animate(false);
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>The top of a profile card as others see it: banner, picture, name and effect.</summary>
+    internal sealed class CardPreview : Control
+    {
+        public string PersonName = String.Empty, Status = String.Empty;
+        public Image Picture, BannerPicture;
+        public BannerKind Banner;
+        public int ColourA, ColourB;
+        public CardEffect Effect;
+        public PictureDeco Deco;
+        private Timer _timer;
+        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+
+        public CardPreview()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        public void Animate(bool on)
+        {
+            if (on && _timer == null)
+            {
+                _timer = new Timer();
+                _timer.Interval = 33;
+                _timer.Tick += delegate { Invalidate(); };
+                _timer.Start();
+            }
+            else if (!on && _timer != null)
+            {
+                _timer.Dispose();
+                _timer = null;
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Theme t = Theme.Current;
+            Graphics g = e.Graphics;
+            g.Clear(t.Surface);
+            Rectangle banner = new Rectangle(0, 0, Width, 84);
+            CardEffects.PaintBanner(g, banner, Banner, ColourA, ColourB, BannerPicture, Ui.NameColor(PersonName));
+            CardEffects.PaintEffect(g, Effect, Size, banner, new PointF(50, 84), 34, ColourA, ColourB, 1, _clock.Elapsed.TotalSeconds);
+            using (SolidBrush ring = new SolidBrush(t.Surface))
+                g.FillEllipse(ring, 12, 46, 76, 76);
+            Ui.DrawAvatar(g, new Rectangle(16, 50, 68, 68), PersonName, false, t.Surface, Picture);
+            Ui.DrawText(g, PersonName, Ui.Heading, new Rectangle(98, 88, Width - 108, 30), t.Text, TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+            if (!String.IsNullOrEmpty(Status))
+                Ui.DrawText(g, Status, Ui.Small, new Rectangle(98, 118, Width - 108, 18), t.Text2, TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+            CardEffects.PaintDeco(g, Deco, new PointF(50, 84), 34, ColourA, ColourB, _clock.Elapsed.TotalSeconds);
+            using (Pen border = new Pen(t.Line))
+                g.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
         }
     }
 

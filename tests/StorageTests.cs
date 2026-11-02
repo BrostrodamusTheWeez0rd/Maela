@@ -177,16 +177,155 @@ namespace Maela.Tests
             Check(IsIntact(SavedRoomStore.Load()), "the rooms are all still there next launch");
         }
 
+        static object CallMainForm(string method, params object[] args)
+        {
+            return typeof(MainForm).GetMethod(method, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).Invoke(null, args);
+        }
+
+        static bool Finite(double v)
+        {
+            return !Double.IsNaN(v) && !Double.IsInfinity(v);
+        }
+
+        // Where rooms, friends, circles and channels sit in the Dynamic layout, as saved on disk.
+        static void SpatialLayout()
+        {
+            Reset();
+            SavedRoom placed = Room();
+            placed.Circle = "c1a2b3";
+            placed.ChannelLayout = "1.5708,0.8,1.2;;0.5,1.7,0.6";
+            placed.Placed = true;
+            placed.PlaceX = -123.4;
+            placed.PlaceY = 56.7;
+            placed.Size = 1.4;
+            SavedRoom sized = Room();
+            sized.Name = "Sized";
+            sized.Circle = "fav";
+            sized.Size = 0.8;
+            SavedRoom plain = Room();
+            plain.Name = "Plain";
+            Check(SavedRoomStore.Save(new List<SavedRoom>(new SavedRoom[] { placed, sized, plain })), "rooms with places and channel layouts save");
+            List<SavedRoom> back = SavedRoomStore.Load();
+            Check(back.Count == 3, "and load");
+            if (back.Count == 3)
+            {
+                SavedRoom p = back[0], s = back[1], n = back[2];
+                Check(p.Circle == "c1a2b3" && p.ChannelLayout == "1.5708,0.8,1.2;;0.5,1.7,0.6", "circle and channel layout survive");
+                Check(p.Placed && p.PlaceX == -123.4 && p.PlaceY == 56.7 && p.Size == 1.4, "a placed, resized room keeps its place and size");
+                Check(!s.Placed && s.Size == 0.8 && s.Circle == "fav", "a resized room that isn't placed keeps just its size");
+                Check(!n.Placed && n.Size == 1 && n.Circle == String.Empty && n.ChannelLayout == String.Empty, "an untouched room stays untouched");
+                Check(IsIntact(new List<SavedRoom>(new SavedRoom[] { p })), "and every older field still survives");
+            }
+
+            // Files from before these fields existed.
+            string older = "1|41234|" + B64(RoomName) + "|" + B64(Code()) + "|1|" + B64(ChannelName) + "|" +
+                SecretStore.Protect(VoipEngineTestKeys.HostPrivateKey) + "|" + SecretStore.Protect(Encoding.UTF8.GetBytes(Password));
+            EncryptedFile.Write(Encrypted, Encoding.UTF8.GetBytes(older + "\n" + older + "||\n" + older + "|||1\n" + older + "|||c9|0.1,1,1"));
+            back = SavedRoomStore.Load();
+            bool defaults = back.Count == 4;
+            foreach (SavedRoom r in back)
+                defaults &= !r.Placed && r.Size == 1 && r.Name == RoomName && Same(r.HostKey, VoipEngineTestKeys.HostPrivateKey);
+            Check(defaults, "rooms saved by older versions load in their usual place and size");
+            Check(back.Count == 4 && back[2].Circle == "fav" && back[3].Circle == "c9" && back[3].ChannelLayout == "0.1,1,1", "the old favourite flag and earlier circles still load");
+
+            // Damaged or hand-edited places: never a place that isn't a number, a size outside the limits, or a crash.
+            string[] bad = { "abc", "1,2", "1,2,3,4", ",,", "x,y,z", "NaN,NaN,NaN", "Infinity,5,1", "5,-Infinity,1", "1e400,5,1", "1e300,5,1", "5,5,99", "5,5,-3", "5,5,NaN", "\u0000,\u0000,\u0000" };
+            bool tolerated = true;
+            foreach (string text in bad)
+            {
+                bool isPlaced; double x, y, size;
+                SpatialPlace.Parse(text, out isPlaced, out x, out y, out size);
+                bool ok = Finite(x) && Finite(y) && size >= 0.6 && size <= 1.8 && (isPlaced || (x == 0 && y == 0));
+                if (!ok) Console.WriteLine("     " + text + " -> " + isPlaced + " " + x + "," + y + " " + size);
+                tolerated &= ok;
+            }
+            Check(tolerated, "damaged places load as no place, and sizes stay within the limits");
+            {
+                bool isPlaced; double x, y, size;
+                SpatialPlace.Parse("NaN,NaN,1.2", out isPlaced, out x, out y, out size);
+                Check(!isPlaced && size == 1.2, "a damaged place keeps a good size");
+                SpatialPlace.Parse(SpatialPlace.Format(true, 1234.56, -0.04, 1.234), out isPlaced, out x, out y, out size);
+                Check(isPlaced && x == 1234.6 && y == 0 && size == 1.23, "places are stored to a tenth, sizes to a hundredth");
+                Check(SpatialPlace.Format(false, 0, 0, 1) == String.Empty, "nothing is stored for an untouched room");
+            }
+            string damagedLine = older + "|||c9|garbage;;;|NaN,Infinity,77";
+            EncryptedFile.Write(Encrypted, Encoding.UTF8.GetBytes(damagedLine));
+            back = SavedRoomStore.Load();
+            Check(back.Count == 1 && !back[0].Placed && back[0].Size == 1.8 && IsIntact(back), "a room with a damaged place still loads, with everything else intact");
+
+            // Circles saved in settings, damaged the same way.
+            List<SpatialCircle> circles = (List<SpatialCircle>)CallMainForm("ParseCircles", "c1|Mine|1|NaN|5;c2|Two|1|Infinity|-Infinity;c3|Three|1|12.5|-40;bad", "Rooms");
+            SpatialCircle c1 = circles.Find(delegate(SpatialCircle c) { return c.Id == "c1"; });
+            SpatialCircle c2 = circles.Find(delegate(SpatialCircle c) { return c.Id == "c2"; });
+            SpatialCircle c3 = circles.Find(delegate(SpatialCircle c) { return c.Id == "c3"; });
+            Check(c1 != null && !c1.HasPosition && Finite(c1.X) && c2 != null && !c2.HasPosition && Finite(c2.Y), "circles with damaged places are placed afresh");
+            Check(c3 != null && c3.HasPosition && c3.X == 12.5 && c3.Y == -40, "good circles keep their place");
+            Check(circles.Exists(delegate(SpatialCircle c) { return c.Id == SpatialCircle.FavouritesId; }) && circles.Exists(delegate(SpatialCircle c) { return c.Id == SpatialCircle.FriendsId; }),
+                "the built-in circles are always there");
+
+            // Friend places live in settings.
+            AppPreferences prefs = new AppPreferences();
+            prefs.FriendPlaces = "abc123:12.5,-3,1.4;def456:,,0.8";
+            PreferencesStore.Save(prefs);
+            Check(PreferencesStore.Load().FriendPlaces == "abc123:12.5,-3,1.4;def456:,,0.8", "friend places survive saving and loading settings");
+            File.WriteAllLines(PreferencesStore.FileForTests, new string[] { "friendplaces=  x:NaN,1,9;;:;y  ", "friendplaces" });
+            Check(PreferencesStore.Load().FriendPlaces == "x:NaN,1,9;;:;y", "damaged friend places load without trouble (each place is checked when used)");
+
+            // A hosted room's channel layout: saved, then put back when it starts again.
+            VoipEngine host = new VoipEngine();
+            host.HeadlessForTests = true;
+            host.StartHost(0, "Host", "Test Room", new List<string>(new string[] { "General", "Games", "Music" }), VoipEngineTestKeys.HostPrivateKey, null);
+            VoipEngine again = new VoipEngine();
+            again.HeadlessForTests = true;
+            again.StartHost(0, "Host", "Test Room", new List<string>(new string[] { "General", "Games", "Music" }), VoipEngineTestKeys.HostPrivateKey, null);
+            try
+            {
+                VoiceChannelInfo[] channels = host.GetChannels();
+                host.SetChannelLayout(channels[0].Id, 1.0, 1.2, 1.5);
+                host.SetChannelLayout(channels[2].Id, 4.0, 0.6, 0.7);
+                string saved = (string)CallMainForm("FormatChannelLayout", host, channels);
+                CallMainForm("RestoreChannelLayout", again, saved);
+                VoiceChannelInfo[] restored = again.GetChannels();
+                bool same = channels.Length == 3 && restored.Length == 3;
+                for (int i = 0; same && i < 3; i++)
+                {
+                    ChannelLayout a = host.GetChannelLayout(channels[i].Id), b = again.GetChannelLayout(restored[i].Id);
+                    same = (a == null) == (b == null) && (a == null || (Math.Abs(a.Angle - b.Angle) < 0.001 && a.Reach == b.Reach && a.Size == b.Size));
+                }
+                Check(same && again.GetChannelLayout(restored[1].Id) == null, "a channel layout saved with the room comes back the same, moved channels only (" + saved + ")");
+
+                CallMainForm("RestoreChannelLayout", again, "NaN,NaN,NaN;Infinity,-Infinity,1e400;junk");
+                bool finite = true;
+                foreach (VoiceChannelInfo c in again.GetChannels())
+                {
+                    ChannelLayout l = again.GetChannelLayout(c.Id);
+                    if (l != null)
+                        finite &= Finite(l.Angle) && l.Reach >= VoipEngine.MinChannelReach && l.Reach <= VoipEngine.MaxChannelReach && l.Size >= VoipEngine.MinChannelSize && l.Size <= VoipEngine.MaxChannelSize;
+                }
+                Check(finite, "a damaged channel layout is clamped or skipped");
+                CallMainForm("RestoreChannelLayout", again, "1,1,1;1,1,1;1,1,1;1,1,1;1,1,1");
+                CallMainForm("RestoreChannelLayout", again, null);
+                Check(again.IsRunning, "more entries than channels, or none, are fine");
+            }
+            finally
+            {
+                host.Dispose();
+                again.Dispose();
+            }
+        }
+
         static int Main()
         {
             _folder = Path.Combine(Path.GetTempPath(), "MaelaStorageTests-" + Guid.NewGuid().ToString("N"));
             SavedRoomStore.FolderForTests = _folder;
+            PreferencesStore.FileForTests = Path.Combine(_folder, "settings.txt");
             try
             {
                 NothingReadable();
                 ConvertsOldFile();
                 KeepsUnreadableFile();
                 LockedFileIsNotOverwritten();
+                SpatialLayout();
             }
             finally
             {

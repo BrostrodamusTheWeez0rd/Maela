@@ -71,5 +71,19 @@ Before tagging a public build:
       works; the picture is smooth at 1080p60 between two PCs on different networks.
 - [ ] Change on the live bar: switching screen, window, quality and frame rate keeps viewers connected, including going from below 1080p to above and back, with GPU and processor decoding.
 - [ ] The screen sharing notice appears until Don't show me again is on; Cancel stops; "always through the host" in Settings works.
-- [ ] Settings > Licenses shows the MIT license and third-party notices.
+- [ ] Settings > Licenses shows the MIT license and third-party notices, including RNNoise, the fonts and Twemoji.
+
+Dynamic layout and 0.13 features:
+
+- [ ] The first launch after updating shows the 7-page tour, with Dynamic picked on a PC with a graphics card and Lightweight on one without. Settings > Layout switches either way without leaving a room or call.
+- [ ] Dynamic: pan, zoom and fly into a room and back out (scroll or Esc). Rooms and friends sort into Favourites, Rooms and Friends; an orb can be dropped into any circle or out on its own, and held and scrolled to resize. "+ New" and right-click "New circle here" make circles; a circle's name drags the whole circle. Everything is where you left it after a restart.
+- [ ] The pointer effects: the glide and lines, the dense ring while dragging or zoomed in, the loose ring when hovering an orb, and the spokes from a hovered circle name. Reduce motion turns them all off and everything still works; Motion's Smooth, Balanced and Light settings all draw smoothly enough.
+- [ ] Inside a room: one click on a voice channel joins it and a double click opens its chat; the room's own orb tucks the channels in and out. Waveform lines move with talking and grow louder with shouting.
+- [ ] The host drags and resizes channels; a member on another PC sees them move live, and the layout comes back after re-hosting. Members on 0.12 can still join and talk.
+- [ ] Profile cards appear on hover and open on click; your own card grows out of your dock picture. A banner (colour, gradient, picture), card deco and picture deco show for others; Dynamic effects off hides decos.
+- [ ] Pictures: the picture button, pasting a screenshot with Ctrl+V, and the viewer's Save work in a room channel and in a friend chat, both ways between two PCs. A 0.12 copy sees "Sent a picture. Update mæla to see it." Friend pictures are still there after a restart.
+- [ ] A YouTube link shows a card; Play opens the browser, and the preview loads only after Show preview.
+- [ ] Strong noise filter: typing and clicks near the mic aren't heard and don't open it, speech comes through clearly, and turning it off in Settings switches back to the original filter.
+- [ ] Fonts: each font in Settings applies in Dynamic, including the initials on orbs; text size and the bigger small text look right, and Lightweight keeps Windows' font.
+- [ ] Colour emoji show in Dynamic chat and statuses.
 - [ ] `package_release.cmd` produces the expected release ZIP.

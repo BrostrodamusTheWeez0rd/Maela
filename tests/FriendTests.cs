@@ -847,6 +847,148 @@ namespace Maela.Tests
             Check(FriendService.CleanText(new string('€', 400)).Length < 400, "messages stay under the packet limit");
         }
 
+        static byte[] TestPicture(int seed, int width, int height)
+        {
+            using (System.Drawing.Bitmap b = new System.Drawing.Bitmap(width, height))
+            {
+                Random r = new Random(seed);
+                for (int y = 0; y < height; y++)
+                    for (int x = 0; x < width; x++)
+                        b.SetPixel(x, y, System.Drawing.Color.FromArgb((x + r.Next(60)) % 256, (y + r.Next(60)) % 256, (x * y / 40 + seed * 50) % 256));
+                return ChatPicture.FromImage(b);
+            }
+        }
+
+        static string MarkerOf(byte[] blob)
+        {
+            int width, height;
+            ChatPicture.TryReadSize(blob, out width, out height);
+            return ChatPicture.Marker(ChatPicture.IdOf(blob), width, height, blob.Length);
+        }
+
+        // A modified copy pushing chunks of a picture down its session, claimed to be picture <id>.
+        static void PushChunks(FriendService from, string to, string id, byte[] blob)
+        {
+            for (int i = 0; i * 1000 < blob.Length; i++)
+            {
+                int length = Math.Min(1000, blob.Length - i * 1000);
+                byte[] inner = new byte[23 + length];
+                inner[0] = 9;
+                for (int k = 0; k < 16; k++)
+                    inner[1 + k] = Convert.ToByte(id.Substring(k * 2, 2), 16);
+                BitConverter.GetBytes(blob.Length).CopyTo(inner, 17);
+                BitConverter.GetBytes((ushort)i).CopyTo(inner, 21);
+                Buffer.BlockCopy(blob, i * 1000, inner, 23, length);
+                from.SendInnerForTests(to, inner);
+                if (i % 20 == 19)
+                    Thread.Sleep(5);
+            }
+        }
+
+        static bool Same(byte[] a, byte[] b)
+        {
+            return a != null && b != null && Convert.ToBase64String(a) == Convert.ToBase64String(b);
+        }
+
+        // Pictures in friend chat: sent, fetched, checked and kept; only ever served to who they were sent to.
+        static void Pictures()
+        {
+            string bobFolder = NewFolder();
+            FriendService a = Online("Alice");
+            FriendService b = Online("Bob", bobFolder);
+            FriendService carol = Online("Carol");
+            FriendService mallory = Online("Mallory");
+            MakeFriends(a, b);
+            MakeFriends(a, carol);
+            MakeFriends(b, carol);
+            MakeFriends(b, mallory);
+
+            byte[] photo = TestPicture(1, 400, 300);
+            string photoId = ChatPicture.IdOf(photo);
+            Check(a.SendPicture(b.Id, photo), "a picture can be sent to a friend");
+            Check(WaitFor(delegate { return b.GetChat(a.Id).Count == 1 && b.GetChat(a.Id)[0].Text == MarkerOf(photo); }, 3000), "it arrives as a message with the picture's marker");
+            Check(WaitFor(delegate { return Same(b.GetPicture(photoId), photo); }, 15000), "the friend fetches the exact picture (" + ((photo.Length + 999) / 1000) + " chunks)");
+            Check(!b.PictureComing(photoId), "nothing still on its way");
+            Check(Same(a.GetPicture(photoId), photo), "the sender has it too");
+            Check(!a.SendPicture(b.Id, new byte[50]) && !a.SendPicture(b.Id, null), "something that isn't a picture isn't sent");
+
+            // Only to who it was sent to: Carol is Alice's friend too, but wasn't sent it.
+            carol.ExpectPictureForTests(a.Id, MarkerOf(photo));
+            Thread.Sleep(3000);
+            Check(carol.GetPicture(photoId) == null, "another friend can't fetch a picture that wasn't sent to them");
+            Check(carol.PictureComing(photoId), "(they did ask for it)");
+
+            // Hostile pictures from Mallory, a modified copy.
+            int failedBefore = b.GetChat(mallory.Id).Count;
+            Random r = new Random(5);
+            byte[] noise = new byte[20000];
+            r.NextBytes(noise);
+            byte[] garbage = new byte[7 + noise.Length];
+            garbage[0] = (byte)'M'; garbage[1] = (byte)'P'; garbage[2] = 1; garbage[3] = 100; garbage[5] = 100;
+            Buffer.BlockCopy(noise, 0, garbage, 7, noise.Length);
+            Check(mallory.SendPicture(b.Id, garbage), "Mallory sends junk with a picture header");
+            Check(WaitFor(delegate { return b.GetChat(mallory.Id).Count == failedBefore + 1; }, 3000), "the message arrives");
+            Check(WaitFor(delegate { return !b.PictureComing(ChatPicture.IdOf(garbage)); }, 15000) && b.GetPicture(ChatPicture.IdOf(garbage)) == null,
+                "it's fetched, fails the check and isn't kept");
+
+            byte[] real = TestPicture(2, 100, 80), other = (byte[])real.Clone();
+            other[other.Length / 2] ^= 0x01; // Same size, one bit changed.
+            string claimed = ChatPicture.IdOf(real);
+            mallory.SendMessage(b.Id, MarkerOf(real)); // Announces a picture she doesn't have...
+            Check(WaitFor(delegate { return b.PictureComing(claimed); }, 3000), "Bob starts fetching an announced picture");
+            PushChunks(carol, b.Id, claimed, real);     // The right bytes, but from someone it wasn't asked of.
+            Thread.Sleep(1000);
+            Check(b.GetPicture(claimed) == null && b.PictureComing(claimed), "chunks from a friend it wasn't asked of are ignored");
+            PushChunks(mallory, b.Id, claimed, other);  // ...then she pushes a different one under its name.
+            Check(WaitFor(delegate { return !b.PictureComing(claimed); }, 3000) && b.GetPicture(claimed) == null, "a picture whose bytes don't match its name is refused");
+            byte[] unasked = TestPicture(4, 60, 40);
+            PushChunks(mallory, b.Id, ChatPicture.IdOf(unasked), unasked);
+            Thread.Sleep(500);
+            Check(b.GetPicture(ChatPicture.IdOf(unasked)) == null, "chunks nobody asked for are ignored");
+            byte[] probe = new byte[21];
+            probe[0] = 8;
+            for (int k = 0; k < 16; k++)
+                probe[1 + k] = Convert.ToByte(photoId.Substring(k * 2, 2), 16);
+            BitConverter.GetBytes((ushort)64).CopyTo(probe, 19);
+            mallory.SendInnerForTests(b.Id, probe); // Bob has Alice's picture, but didn't send it to Mallory.
+            for (int i = 0; i < 300; i++)
+            {
+                byte[] junk = new byte[r.Next(1, 1100)];
+                r.NextBytes(junk);
+                junk[0] = (byte)(8 + i % 2);
+                mallory.SendInnerForTests(b.Id, junk);
+            }
+            Thread.Sleep(500);
+            Check(mallory.GetPicture(photoId) == null, "a friend can't fetch someone else's picture from you");
+            byte[] after = TestPicture(5, 120, 90);
+            Check(a.SendPicture(b.Id, after) && WaitFor(delegate { return Same(b.GetPicture(ChatPicture.IdOf(after)), after); }, 15000), "pictures still work afterwards");
+
+            // Kept encrypted beside the chat, and there after a restart.
+            b.Dispose();
+            string[] files = Directory.GetFiles(Path.Combine(bobFolder, "pictures"));
+            bool readable = false;
+            foreach (string file in files)
+            {
+                string raw = Encoding.GetEncoding(28591).GetString(File.ReadAllBytes(file));
+                if (raw.Contains("MP\u0001") || raw.Contains(Encoding.GetEncoding(28591).GetString(photo, 7, 40)))
+                    readable = true;
+            }
+            Check(files.Length == 2 && !readable, "pictures are kept encrypted on disk (" + files.Length + " files)");
+            FriendService back = Make(bobFolder);
+            Check(Same(back.GetPicture(photoId), photo), "and are still there next time");
+            string path = Path.Combine(Path.Combine(bobFolder, "pictures"), photoId + ".bin");
+            byte[] damaged = File.ReadAllBytes(path);
+            damaged[damaged.Length / 2] ^= 0x40;
+            File.WriteAllBytes(path, damaged);
+            back.Dispose();
+            back = Make(bobFolder);
+            Check(back.GetPicture(photoId) == null, "a damaged picture file isn't shown");
+            back.Dispose();
+            a.Dispose();
+            carol.Dispose();
+            mallory.Dispose();
+        }
+
         static int Main()
         {
             _root = Path.Combine(Path.GetTempPath(), "MaelaFriendTests-" + Guid.NewGuid().ToString("N"));
@@ -864,6 +1006,7 @@ namespace Maela.Tests
                 NameChanges();
                 Calls();
                 Reactions();
+                Pictures();
                 WindowsSettings();
                 RoomNames();
                 BlockAndRemove();

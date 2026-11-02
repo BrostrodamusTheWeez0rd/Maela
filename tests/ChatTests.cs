@@ -89,6 +89,166 @@ namespace Maela.Tests
             return c;
         }
 
+        // A busy test picture (noise over a gradient), big enough to take a few hundred chunks.
+        static byte[] TestPicture(int seed, int width, int height)
+        {
+            using (System.Drawing.Bitmap b = new System.Drawing.Bitmap(width, height))
+            {
+                Random r = new Random(seed);
+                for (int y = 0; y < height; y++)
+                    for (int x = 0; x < width; x++)
+                        b.SetPixel(x, y, System.Drawing.Color.FromArgb((x + r.Next(60)) % 256, (y + r.Next(60)) % 256, (x * y / 40 + seed * 50) % 256));
+                return ChatPicture.FromImage(b);
+            }
+        }
+
+        static byte[] Deflate(byte[] data)
+        {
+            System.IO.MemoryStream m = new System.IO.MemoryStream();
+            using (System.IO.Compression.DeflateStream d = new System.IO.Compression.DeflateStream(m, System.IO.Compression.CompressionMode.Compress, true))
+                d.Write(data, 0, data.Length);
+            return m.ToArray();
+        }
+
+        // A picture header ("MP", version 1, width, height) followed by whatever comes after it.
+        static byte[] Headed(int width, int height, byte[] body)
+        {
+            byte[] blob = new byte[7 + body.Length];
+            blob[0] = (byte)'M'; blob[1] = (byte)'P'; blob[2] = 1;
+            blob[3] = (byte)width; blob[4] = (byte)(width >> 8);
+            blob[5] = (byte)height; blob[6] = (byte)(height >> 8);
+            Buffer.BlockCopy(body, 0, blob, 7, body.Length);
+            return blob;
+        }
+
+        // Pictures the host has posted in a channel, as their markers.
+        static List<string> Pictures(VoipEngine engine, int channel)
+        {
+            List<string> list = new List<string>();
+            foreach (ChatMessage m in engine.GetChat(channel))
+                if (m.IsPicture && !m.Pending && !m.Failed)
+                    list.Add(m.SenderName + ":" + m.Text);
+            return list;
+        }
+
+        static bool Has(VoipEngine engine, byte[] blob)
+        {
+            byte[] got = engine.GetPicture(ChatPicture.IdOf(blob), blob.Length);
+            return got != null && Convert.ToBase64String(got) == Convert.ToBase64String(blob);
+        }
+
+        static void PictureScenario(VoipEngine host, VoipEngine alice, VoipEngine bob, int port, double loss)
+        {
+            Console.WriteLine("  Pictures");
+            alice.ViewChannel(1);
+            bob.ViewChannel(1);
+            Thread.Sleep(300);
+            byte[] photo = TestPicture(1, 400, 300);
+            int w, h;
+            byte[] rgb;
+            Check(ChatPicture.TryDecode(photo, out w, out h, out rgb) && w == 400 && h == 300, "a picture is rebuilt as plain pixels (" + (photo.Length / 1000) + " KB, " + ((photo.Length + 999) / 1000) + " chunks)");
+            string photoId = ChatPicture.IdOf(photo);
+
+            DateTime t0 = DateTime.UtcNow;
+            Check(alice.SendPicture(photo), "Alice sends a picture");
+            Check(WaitFor(delegate { return Pictures(host, 1).Count == 1 && Pictures(bob, 1).Count == 1 && Pictures(alice, 1).Count == 1; }, 30000),
+                "the host checks it and posts it, and everyone sees the message");
+            Check(Pictures(bob, 1).Count == 1 && Pictures(bob, 1)[0].StartsWith("Alice:") && Pictures(bob, 1)[0].Contains(photoId), "it shows as Alice's picture");
+            Check(WaitFor(delegate { return Has(bob, photo); }, 30000), "Bob gets the exact picture from the host");
+            Console.WriteLine("     posted and fetched in " + (DateTime.UtcNow - t0).TotalSeconds.ToString("F1") + " s");
+            Check(Has(alice, photo) && Has(host, photo), "Alice and the host have it too");
+            Check(!bob.PictureComing(photoId), "nothing still on its way");
+            string marker;
+            {
+                string id; int mw, mh, mb;
+                marker = Pictures(bob, 1)[0].Substring("Alice:".Length);
+                Check(ChatPicture.TryParseMarker(marker, out id, out mw, out mh, out mb) && id == photoId && mw == 400 && mh == 300 && mb == photo.Length
+                    && marker.StartsWith("🖼 Sent a picture. Update mæla to see it."), "older versions see the plain words instead");
+            }
+
+            // The host's own pictures, and two in a row (the second waits out the per-person limit).
+            byte[] second = TestPicture(2, 200, 150), third = TestPicture(3, 160, 120), hostPhoto = TestPicture(4, 120, 90);
+            Check(host.SendPicture(hostPhoto) && WaitFor(delegate { return Has(alice, hostPhoto) && Has(bob, hostPhoto); }, 30000), "the host's own pictures reach everyone");
+            alice.SendPicture(second);
+            alice.SendPicture(third);
+            Check(WaitFor(delegate { return Has(bob, second) && Has(bob, third); }, 30000), "two pictures sent at once both arrive");
+            Check(WaitFor(delegate
+            {
+                foreach (ChatMessage m in alice.GetChat(1)) if (m.IsPicture && (m.Pending || m.Failed)) return false;
+                return true;
+            }, 10000), "no stuck or failed pictures");
+            foreach (ChatMessage m in alice.GetChat(1))
+                if (m.IsPicture && (m.Pending || m.Failed))
+                    Console.WriteLine("     still " + (m.Failed ? "failed" : "sending") + " after " + m.Attempts + " offers: " + m.Text);
+
+            // Typed words can't pass for a picture: only the host makes picture messages.
+            alice.SendChat(marker.Replace(photoId, ChatPicture.IdOf(second)));
+            Check(WaitFor(delegate
+            {
+                int fake = 0;
+                foreach (ChatMessage m in bob.GetChat(1)) if (!m.IsPicture && m.Text.Contains("[mp1:")) fake++;
+                return fake == 1;
+            }, 10000) && Pictures(bob, 1).Count == 4, "a typed marker stays plain text");
+
+            // Mallory: a modified client sending pictures that aren't what they say.
+            VoipEngine mallory = Client(port, "Mallory", loss);
+            try
+            {
+                Check(WaitFor(delegate { return mallory.IsInVoice && mallory.LocalChannelId == 1; }, 10000), "Mallory joins");
+                int before = Pictures(host, 1).Count;
+                List<byte[]> bad = new List<byte[]>();
+                Random r = new Random(5);
+                byte[] noise = new byte[30000];
+                r.NextBytes(noise);
+                bad.Add(Headed(100, 100, noise));                                                  // Not deflate at all.
+                bad.Add(Headed(1920, 1080, Deflate(new byte[(1920 * 3 + 1) * 1080 * 4])));        // A bomb: four times the pixels.
+                bad.Add(Headed(100, 100, Deflate(new byte[(100 * 3 + 1) * 100 - 1])));             // One byte short.
+                bad.Add(Headed(100, 100, Deflate(new byte[(100 * 3 + 1) * 100 + 1])));             // One byte long.
+                byte[] badFilter = new byte[(10 * 3 + 1) * 10];
+                badFilter[0] = 9;
+                bad.Add(Headed(10, 10, Deflate(badFilter)));                                       // An unknown row filter.
+                foreach (byte[] blob in bad)
+                    Check(!ChatPicture.TryReadSize(blob, out w, out h) || !ChatPicture.TryDecode(blob, out w, out h, out rgb), "refused on its own: " + bad.IndexOf(blob));
+                foreach (byte[] blob in bad)
+                    mallory.SendPicture(blob);
+                // Bytes that don't match their name: a real picture offered as another one.
+                byte[] swapped = TestPicture(6, 100, 80);
+                string claimed = ChatPicture.IdOf(TestPicture(7, 100, 80));
+                mallory.SendPictureAsForTests(swapped, claimed);
+                // Raw packets: silly sizes, a channel she isn't in, chunks nobody asked for, requests for nothing.
+                byte[] offer = new byte[28];
+                r.NextBytes(offer);
+                Buffer.BlockCopy(BitConverter.GetBytes(ChatPicture.MaxBytes + 1), 0, offer, 16, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(1), 0, offer, 20, 4);
+                mallory.SendToHostForTests(VoipEngine.PictureOfferTypeForTests, offer);
+                Buffer.BlockCopy(BitConverter.GetBytes(5000), 0, offer, 16, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(99), 0, offer, 20, 4);
+                mallory.SendToHostForTests(VoipEngine.PictureOfferTypeForTests, offer);
+                for (int i = 0; i < 2000; i++)
+                {
+                    byte[] junk = new byte[r.Next(0, 1100)];
+                    r.NextBytes(junk);
+                    byte type = i % 3 == 0 ? VoipEngine.PictureOfferTypeForTests : i % 3 == 1 ? VoipEngine.PictureGetTypeForTests : VoipEngine.PictureDataTypeForTests;
+                    mallory.SendToHostForTests(type, junk);
+                    if (i % 200 == 0) Thread.Sleep(5);
+                }
+                Thread.Sleep(12000); // Long enough for every offer to be pulled and checked, more than once.
+                Check(Pictures(host, 1).Count == before && Pictures(bob, 1).Count == before, "the host posts none of them (" + (Pictures(host, 1).Count - before) + " posted)");
+                int kept = 0;
+                foreach (byte[] blob in bad)
+                    if (host.GetPicture(ChatPicture.IdOf(blob), blob.Length) != null) kept++;
+                if (host.GetPicture(claimed, swapped.Length) != null) kept++;
+                Check(kept == 0, "and keeps none of them");
+                Check(host.IsRunning && alice.IsConnected && bob.IsConnected && mallory.IsConnected, "the room keeps running");
+                byte[] after = TestPicture(8, 120, 90);
+                Check(bob.SendPicture(after) && WaitFor(delegate { return Has(alice, after); }, 30000), "pictures still work for everyone else");
+            }
+            finally
+            {
+                mallory.Dispose();
+            }
+        }
+
         static void Scenario(double loss)
         {
             Console.WriteLine();
@@ -192,6 +352,8 @@ namespace Maela.Tests
                     Check(bob.SendChat("note 1") && WaitFor(delegate { return Texts(alice, notes) == "Bob:note 1"; }, 8000),
                         "posts in the chat-only channel reach people who have it open");
                 }
+
+                PictureScenario(host, alice, bob, port, loss);
             }
             finally
             {

@@ -59,7 +59,9 @@ namespace Maela
             _justUpdated = justUpdated;
             Text = "m\u00E6la";
             try { Icon = Branding.LoadAppIcon(); } catch { Icon = SystemIcons.Application; }
-            ClientSize = new Size(1200, 760);
+            // A little roomier to start with, but never bigger than most of the screen.
+            Rectangle work = Screen.PrimaryScreen.WorkingArea;
+            ClientSize = new Size(Math.Min(1320, work.Width * 92 / 100), Math.Min(840, work.Height * 92 / 100));
             MinimumSize = new Size(980, 640);
             StartPosition = FormStartPosition.CenterScreen;
 
@@ -591,6 +593,7 @@ namespace Maela
             int i;
             for (i = 0; i < channels.Length; i++)
                 _activeSavedRoom.ChannelNames.Add((channels[i].IsText ? VoipEngine.TextChannelMarker : String.Empty) + channels[i].Name);
+            _activeSavedRoom.ChannelLayout = FormatChannelLayout(_engine, channels);
             SavedRoomStore.Save(_savedRooms);
         }
 
@@ -797,6 +800,7 @@ namespace Maela
                 }
                 _engine.StartHost(requestedPort, displayName, roomName, room.ChannelNames, room.HostKey, room.Password);
                 _engine.SetRoomArt(room.IconBlob, room.BannerBlob);
+                RestoreChannelLayout(_engine, room.ChannelLayout);
                 _localBoundPort = _engine.BoundPort;
                 _activeSavedRoom = saved ? room : null;
                 _activeRoomName = roomName;
@@ -871,6 +875,12 @@ namespace Maela
         /// <summary>Your own card: works even when you're not in a room.</summary>
         private void ShowMyProfileCard()
         {
+            ShowProfileCard(MyMember(), Cursor.Position);
+        }
+
+        /// <summary>You, as a member of your room, or on your own when you're not in one.</summary>
+        private RoomMemberInfo MyMember()
+        {
             RoomMemberInfo me = _engine != null && _engine.IsConnected ? FindMember(_engine.LocalMemberId) : null;
             if (me == null)
             {
@@ -878,7 +888,7 @@ namespace Maela
                 me.Name = _preferences.DisplayName;
                 me.IsLocal = true;
             }
-            ShowProfileCard(me, Cursor.Position);
+            return me;
         }
 
         private void ApplyPreferencesToEngine()
@@ -891,6 +901,7 @@ namespace Maela
             _engine.MasterVolumePercent = _preferences.MasterVolumePercent;
             _engine.EchoCancellation = _preferences.EchoCancellation;
             _engine.NoiseSuppression = _preferences.NoiseSuppression;
+            _engine.StrongNoiseFilter = _preferences.StrongNoiseFilter;
             _engine.AutoGain = _preferences.AutoGain;
             _engine.AllowDirectStreams = _preferences.AllowDirectStreams;
         }

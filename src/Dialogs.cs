@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -201,7 +202,7 @@ namespace Maela
         }
     }
 
-    /// <summary>A clickable preview of a layout (Spatial or Classic), drawn in the current colours.</summary>
+    /// <summary>A clickable preview of a layout (Dynamic or Lightweight), drawn in the current colours.</summary>
     internal sealed class LayoutCard : Control
     {
         public readonly bool Classic;
@@ -248,7 +249,10 @@ namespace Maela
             }
             Color border = Selected ? t.Accent : (_hover ? t.Text2 : t.Line);
             Ui.StrokeRound(g, border, new RectangleF(1, 1, Width - 3, 121), 10, Selected ? 2.5f : 1.2f);
-            Ui.DrawText(g, Classic ? "Lightweight" : "Spatial", Selected ? Ui.BodyBold : Ui.Body, new Rectangle(0, 130, Width, 22), Selected ? t.Text : t.Text2, TextFormatFlags.HorizontalCenter);
+            Font font = Selected ? Ui.BodyBold : Ui.Body;
+            Color ink = Selected ? t.Text : t.Text2;
+            // The two layouts. Themes (Spatial is the first Dynamic one) are chosen within a layout.
+            Ui.DrawText(g, Classic ? "Lightweight" : "Dynamic", font, new Rectangle(0, 130, Width, 22), ink, TextFormatFlags.HorizontalCenter);
         }
 
         /// <summary>Room rail, channel list and chat.</summary>
@@ -508,37 +512,75 @@ namespace Maela
     }
 
     /// <summary>
-    /// Shown once, the first time mæla opens after the update that brought Spatial: what changed,
-    /// and a choice of look, with the one picked for this PC already selected.
+    /// Shown once, the first time mæla opens after this update: a short tour of what's new, a page
+    /// at a time, ending with a choice of layout, with the one picked for this PC already selected.
     /// </summary>
     internal sealed class WhatsNewDialog : ThemedDialog
     {
         private readonly LayoutCard _spatialCard = new LayoutCard(false);
         private readonly LayoutCard _lightweightCard = new LayoutCard(true);
+        private readonly List<Panel> _pages = new List<Panel>();
+        private readonly FlatButton _back = new FlatButton();
+        private readonly FlatButton _next = new FlatButton();
+        private readonly Label _where = new Label();
+        private int _page;
 
         public bool SpatialChosen { get { return _spatialCard.Selected; } }
 
         public WhatsNewDialog(bool spatial, string graphicsCard) : base("What's new in mæla", 680, 600)
         {
             bool hasCard = graphicsCard != null;
+
+            Page("mæla has a new look",
+                "Meet the Dynamic layout, and Spatial, its first theme, with more to come. It's a whole new way to get around your rooms and friends.",
+                "Your rooms and friends float together in one space. Drag the background to move around, and scroll to zoom.",
+                "Click a room to fly into it, or scroll in on it. Scroll back out, or press Esc, to leave.",
+                "Rooms and friends are glass orbs. They glow when they're online (amber when someone's away, red when they're busy) and look switched off when they're not.",
+                "Orbs without a picture each get their own swirl of colour made from their name, so they're easy to tell apart.",
+                "Your voice controls stay in the dock at the bottom wherever you are, and right-click opens options on almost anything.");
+
+            Page("Rooms and friends, your way",
+                "Sort everything into circles. They're kept on your PC only.",
+                "Rooms start in Rooms and friends in Friends. Favourites and circles of your own can hold both.",
+                "Drop a room or friend anywhere: into a circle, where it stays put (the circle grows to fit), or out on its own.",
+                "Hold an orb and scroll to make it bigger or smaller. Drag a circle's name to move the whole circle.",
+                "Right-click empty space to make a circle right there, or use + New in the side panel to host a room, join with a code or add a friend.",
+                "Right-click a circle's name to tidy it back up, rename it or delete it.");
+
+            Page("Inside a room",
+                "Channels spread out round the room, with everyone in them.",
+                "Click a voice channel to move into it, and double-click any channel to open its chat.",
+                "A line runs from each person to their channel. It turns into a live waveform when they talk, bigger the louder they are.",
+                "Rest on someone to see their card, and click them for their volume and mute. Hosts also get move, kick and ban.",
+                "Hosts can drag people between channels, drag channels round the room, and hold and scroll to resize them. Everyone sees it live, and it's saved with the room.",
+                "Click the room's own orb to pull its channels in, and again to let them out.");
+
+            Page("Your profile",
+                "Make your card your own in Edit profile.",
+                "Give your card a banner: a colour, a gradient or a picture.",
+                "Add a card deco (Glow, Sparkles or Aurora) that people see when they open your card.",
+                "Add a picture deco (Orbit, Halo or Ripple) that circles your picture on your card and wherever you appear.",
+                "Click your own picture in the dock and your card grows up out of it.");
+
+            Page("Chat and voice",
+                "Clearer calls and richer chat.",
+                "A new Strong noise filter takes out typing, clicks and other noises, and only opens your mic when you talk. It runs on your PC alone, and you can switch back to the lighter one in Settings.",
+                "Send pictures in rooms and friend chats with the picture button, or paste one (a screenshot too) with Ctrl+V. Click one to see it full size or save it.",
+                "Pictures are rebuilt from their pixels on your PC, so nothing hidden in the file (location, camera details, its name) is ever sent.",
+                "YouTube links show as a card. Nothing is loaded from YouTube unless you ask for a preview.",
+                "Emoji show in colour in the Dynamic layout too.");
+
+            Page("Make it yours",
+                "Everything's in Settings.",
+                "Nine colours, each with two accents. mæla's icons, even your desktop shortcuts, take your colour.",
+                "Fonts: Outfit to start with, or OpenDyslexic, Atkinson Hyperlegible, Lexend, Space Grotesk or Windows' own.",
+                "Text size, Reduce motion for a calmer space, and how smoothly the Dynamic layout moves.",
+                "Dynamic effects decides whether you see the decos people choose for their cards.");
+
+            // The last page: which layout.
+            Panel last = BeginPage();
+            AddHeading("Choose your layout", "You can switch at any time in Settings, under Layout, without leaving your room or call.");
             int width = ClientSize.Width - Margin_X * 2;
-            AddHeading("mæla has a new look", "Meet Spatial, a new way to get around your rooms and friends.");
-
-            AddSection("Spatial");
-            string[] points =
-            {
-                "Your rooms and friends float in their own spaces. Drag to move around, and scroll to zoom.",
-                "Click a room to fly into it. Its channels, and who's in them, spread out around it.",
-                "Chat opens in a panel, and your voice controls stay in the dock at the bottom.",
-                "Drag rooms and friends into circles to sort them, and right-click anything for its options."
-            };
-            foreach (string point in points)
-            {
-                AddText("•  " + point, Theme.Current.Text2, width);
-                Cursor_Y -= 2; // Keeps the list together.
-            }
-
-            AddSection("Choose your look");
             _spatialCard.Location = new Point(Margin_X, Cursor_Y);
             _lightweightCard.Location = new Point(Margin_X + width - _lightweightCard.Width, Cursor_Y);
             _spatialCard.Selected = spatial;
@@ -549,16 +591,104 @@ namespace Maela
             _lightweightCard.Click += CardClicked;
             Controls.Add(_spatialCard);
             Controls.Add(_lightweightCard);
-            Cursor_Y += _spatialCard.Height + 8;
+            Cursor_Y += _spatialCard.Height + 12;
             string card = String.IsNullOrEmpty(graphicsCard) ? "graphics card" : graphicsCard;
             AddText(hasCard
-                ? "Spatial is recommended for this PC: your " + card + " can run it smoothly. Lightweight is the window you already know, and you can switch between the two at any time in Settings, under Themes."
-                : "Lightweight is recommended for this PC: mæla couldn't find a graphics card, and Lightweight runs well anywhere. You can still try Spatial, but it may feel slow.", Theme.Current.Muted, width);
-            AddText("There are also nine colours to choose from in Settings, and mæla's icons take your colour too.", Theme.Current.Muted, width);
+                ? "Dynamic is recommended for this PC: your " + card + " can run it smoothly. Lightweight is the window you already know."
+                : "Lightweight is recommended for this PC: mæla couldn't find a graphics card, and Lightweight runs well anywhere. You can still try Dynamic, but it may feel slow.", Theme.Current.Muted, width);
+            EndPage(last);
 
-            // Fit the window to what's in it, then put the button underneath.
-            ClientSize = new Size(ClientSize.Width, Cursor_Y + 80);
-            AddButtons(null, Button("Start using mæla", DialogResult.OK));
+            // Every page the same size: the tallest.
+            int height = 0;
+            foreach (Panel page in _pages)
+                height = Math.Max(height, page.Height);
+            ClientSize = new Size(ClientSize.Width, height + 84);
+            foreach (Panel page in _pages)
+                page.Height = height;
+
+            _where.AutoSize = false;
+            _where.Font = Ui.Small;
+            _where.ForeColor = Theme.Current.Muted;
+            _where.SetBounds(Margin_X, ClientSize.Height - 48, 200, 20);
+            Controls.Add(_where);
+            _back.Text = "Back";
+            _back.Look = ButtonLook.Secondary;
+            _back.SetBounds(ClientSize.Width - Margin_X - 96 - 10 - 180, ClientSize.Height - 58, 96, 38);
+            _back.Click += delegate { Show(_page - 1); };
+            Controls.Add(_back);
+            _next.Look = ButtonLook.Primary;
+            _next.SetBounds(ClientSize.Width - Margin_X - 180, ClientSize.Height - 58, 180, 38);
+            _next.Click += delegate
+            {
+                if (_page < _pages.Count - 1)
+                    Show(_page + 1);
+                else
+                {
+                    DialogResult = DialogResult.OK;
+                    Close();
+                }
+            };
+            Controls.Add(_next);
+            AcceptButton = _next;
+            KeyPreview = true;
+            KeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Left && _page > 0) Show(_page - 1);
+                else if (e.KeyCode == Keys.Right && _page < _pages.Count - 1) Show(_page + 1);
+            };
+            Show(0);
+        }
+
+        /// <summary>A page of points: a heading, a line under it, then each point.</summary>
+        private void Page(string title, string subtitle, params string[] points)
+        {
+            Panel page = BeginPage();
+            AddHeading(title, subtitle);
+            int width = ClientSize.Width - Margin_X * 2;
+            foreach (string point in points)
+            {
+                AddText("•  " + point, Theme.Current.Text2, width);
+                Cursor_Y += 4;
+            }
+            EndPage(page);
+        }
+
+        private int _pageStart;
+
+        /// <summary>Starts a page: what's added until EndPage goes onto it.</summary>
+        private Panel BeginPage()
+        {
+            Cursor_Y = 20;
+            _pageStart = Controls.Count;
+            return new Panel();
+        }
+
+        private void EndPage(Panel page)
+        {
+            List<Control> added = new List<Control>();
+            for (int i = _pageStart; i < Controls.Count; i++)
+                added.Add(Controls[i]);
+            foreach (Control c in added)
+            {
+                Controls.Remove(c);
+                page.Controls.Add(c);
+            }
+            page.BackColor = Theme.Current.Main;
+            page.SetBounds(0, 0, ClientSize.Width, Cursor_Y + 8);
+            page.Visible = false;
+            Controls.Add(page);
+            _pages.Add(page);
+        }
+
+        private void Show(int index)
+        {
+            _page = Math.Max(0, Math.Min(_pages.Count - 1, index));
+            for (int i = 0; i < _pages.Count; i++)
+                _pages[i].Visible = i == _page;
+            _back.Visible = _page > 0;
+            _next.Text = _page == _pages.Count - 1 ? "Start using mæla" : "Next";
+            _next.Invalidate();
+            _where.Text = (_page + 1) + " of " + _pages.Count;
         }
 
         private void CardClicked(object sender, EventArgs e)
@@ -710,8 +840,15 @@ namespace Maela
         private readonly TrackBar _master = new TrackBar();
         private readonly ToggleSwitch _echo;
         private readonly ToggleSwitch _noise;
+        private readonly ToggleSwitch _strongNoise;
         private readonly LayoutCard _spatialCard = new LayoutCard(false);
         private readonly LayoutCard _classicCard = new LayoutCard(true);
+        private readonly ToggleSwitch _dynamicEffects;
+        private readonly ComboBox _frameRate = new ComboBox();
+        private readonly ComboBox _readingFont = new ComboBox();
+        private readonly ComboBox _textScale = new ComboBox();
+        private readonly ToggleSwitch _reduceMotion;
+        private bool _followingLayout;
         private readonly ToggleSwitch _sounds;
         private readonly ToggleSwitch _agc;
         private readonly ToggleSwitch _autoUpdate;
@@ -742,8 +879,9 @@ namespace Maela
             AddSection("Profile");
             _name = AddField("Display name", _preferences.DisplayName, false);
 
-            // Themes are the layouts; Colours go on either one.
-            AddSection("Themes");
+            // Two layouts, Dynamic and Lightweight. Each will get its own themes to choose from once
+            // there's more than one; for now each has one, and Colours go on either.
+            AddSection("Layout");
             _spatialCard.Location = new Point(Margin_X, Cursor_Y);
             _classicCard.Location = new Point(Margin_X + 316, Cursor_Y);
             _spatialCard.Selected = !_preferences.ClassicLayout;
@@ -760,6 +898,45 @@ namespace Maela
             colours.Picked += ColoursPicked;
             Controls.Add(colours);
             Cursor_Y += colours.Height + 12;
+            _dynamicEffects = AddToggle("Dynamic effects", "Shows the effects people choose for their profile cards. On with the Dynamic layout to start with.", _preferences.ShowDynamicEffects);
+            _dynamicEffects.CheckedChanged += delegate
+            {
+                if (_followingLayout)
+                    return;
+                _preferences.DynamicEffects = _dynamicEffects.Checked; // Your choice now, whichever theme.
+                _preferences.DynamicEffectsSet = true;
+            };
+            AddFieldLabel("Motion in the Dynamic layout", Margin_X, Cursor_Y);
+            Cursor_Y += 22;
+            foreach (string rate in new string[] { "Smooth: every refresh of your screen", "Balanced: half the refresh on fast screens, lighter", "Light: 30 a second, for battery" })
+                _frameRate.Items.Add(rate);
+            StyleCombo(_frameRate);
+            _frameRate.SelectedIndex = Math.Max(0, Math.Min(2, _preferences.FrameRate));
+            _frameRate.SetBounds(Margin_X, Cursor_Y, ClientSize.Width - Margin_X * 2, 28);
+            Controls.Add(_frameRate);
+            Cursor_Y += 40;
+
+            AddSection("Accessibility");
+            AddFieldLabel("Font", Margin_X, Cursor_Y);
+            AddFieldLabel("Text size", Margin_X + 316, Cursor_Y);
+            Cursor_Y += 22;
+            foreach (AppFont font in ReadingFonts.All)
+                _readingFont.Items.Add(font.Name + ": " + font.Description);
+            StyleCombo(_readingFont);
+            _readingFont.SelectedIndex = Math.Max(0, Math.Min(ReadingFonts.All.Length - 1, _preferences.ReadingFont));
+            _readingFont.DropDownWidth = 380;
+            _readingFont.SetBounds(Margin_X, Cursor_Y, 300, 28);
+            Controls.Add(_readingFont);
+            foreach (string size in new string[] { "100%", "115%", "130%" })
+                _textScale.Items.Add(size);
+            StyleCombo(_textScale);
+            _textScale.SelectedIndex = _preferences.TextScale == 130 ? 2 : _preferences.TextScale == 115 ? 1 : 0;
+            _textScale.SetBounds(Margin_X + 316, Cursor_Y, 300, 28);
+            Controls.Add(_textScale);
+            Cursor_Y += 36;
+            AddText("The font and text size apply in the Dynamic layout. Lightweight keeps Windows' font, which its older drawing can't change.",
+                Theme.Current.Muted, ClientSize.Width - Margin_X * 2).Font = Ui.Small;
+            _reduceMotion = AddToggle("Reduce motion", "No moving dot effects, growing orbs, card decos or swirls. Moving around still works.", _preferences.ReduceMotion);
 
             AddSection("Voice & audio");
             AddFieldLabel("Input device", Margin_X, Cursor_Y);
@@ -776,7 +953,8 @@ namespace Maela
             StyleSlider(_master, _preferences.MasterVolumePercent); _master.SetBounds(Margin_X + 312, Cursor_Y, 300, 36); Controls.Add(_master);
             Cursor_Y += 44;
             _echo = AddToggle("Echo cancellation", "Stops friends hearing themselves through your speakers.", _preferences.EchoCancellation);
-            _noise = AddToggle("Noise filter", "Removes steady background noise like fans, hum and hiss.", _preferences.NoiseSuppression);
+            _noise = AddToggle("Noise filter", "Removes background noise: fans, hum, typing, clicks and more.", _preferences.NoiseSuppression);
+            _strongNoise = AddToggle("Strong noise filter", "Uses RNNoise, a small built-in neural network, and only opens your mic for speech. Off: the lighter original filter.", _preferences.StrongNoiseFilter);
             _agc = AddToggle("Automatic mic level", "Evens out your volume so friends hear you clearly.", _preferences.AutoGain);
             _sounds = AddToggle("Sound effects", "Chimes for joining, leaving, mute, deafen and new messages.", _preferences.SoundEffects);
 
@@ -900,6 +1078,10 @@ namespace Maela
             _classicCard.Selected = _preferences.ClassicLayout;
             _spatialCard.Invalidate();
             _classicCard.Invalidate();
+            // Until it's been switched by hand, it follows the theme.
+            _followingLayout = true;
+            _dynamicEffects.Checked = _preferences.ShowDynamicEffects;
+            _followingLayout = false;
         }
 
         private void ColoursPicked(Theme picked)
@@ -962,6 +1144,7 @@ namespace Maela
             _preferences.MasterVolumePercent = _master.Value;
             _preferences.EchoCancellation = _echo.Checked;
             _preferences.NoiseSuppression = _noise.Checked;
+            _preferences.StrongNoiseFilter = _strongNoise.Checked;
             _preferences.SoundEffects = _sounds.Checked;
             _preferences.AutoGain = _agc.Checked;
             _preferences.CloseToTray = _closeToTray.Checked;
@@ -969,6 +1152,10 @@ namespace Maela
                 _preferences.StreamNoticeShown = true;
             _preferences.AllowDirectStreams = _directStreams.Checked;
             _preferences.StreamDecode = (StreamDecodeMode)_streamDecode.SelectedIndex;
+            _preferences.FrameRate = _frameRate.SelectedIndex;
+            _preferences.ReadingFont = _readingFont.SelectedIndex;
+            _preferences.TextScale = _textScale.SelectedIndex == 2 ? 130 : _textScale.SelectedIndex == 1 ? 115 : 100;
+            _preferences.ReduceMotion = _reduceMotion.Checked;
             if (_autoUpdate.Checked && !_preferences.AutoUpdate)
                 _preferences.SkippedVersion = String.Empty;
             _preferences.AutoUpdate = _autoUpdate.Checked;

@@ -1,29 +1,135 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 - The Dynamic layout
 
-- **A new Spatial layout.** Your rooms and friends float in their own spaces, which you can pan and
-  zoom across. Click a room to fly into it, with its channels and the people in them spread around
-  it, then click a channel to read and write in a flat chat panel. Voice controls stay in a dock at
-  the bottom wherever you are. PCs without a graphics card start on Lightweight instead, and the
-  first time mæla opens after this update, it shows what's new and lets you pick your look.
-- **Sort things into circles.** Drag rooms and friends between Favourites, the main circle and
-  circles of your own. Drag a circle's name to move it, and right-click it to rename or delete it.
-  Circles are kept on your PC only.
-- **Profile cards grow out of people.** Click someone in a room, or in a list, and their card opens
-  around their picture, with your volume and mute for them, their stream, and the host's move, kick
-  and ban. Hosts can also drag people between voice channels, and anyone can drag themselves.
-- **The original window stays, now called Lightweight.** Settings opens with Themes: pick Spatial or
-  Lightweight from a preview of each, drawn in your colours, and choose Colours from the squares
-  below. You can switch at any time without leaving your room or call.
-- **Midnight is the new default colour**, now a neon cyan and navy in both layouts. If you already
-  chose one, you keep it. Your window, taskbar and tray icons take the colour too, and so do
-  shortcuts to mæla on your desktop, in the Start menu or pinned to the taskbar. mæla's own icon is
-  now the blue Midnight logo.
-- **Five new colours:** Synthwave, Forest, Ember, Ocean and Sakura, each with two accents, sorted
+The biggest update yet: a whole new way to get around, a much stronger noise filter, pictures in
+chat, profile banners and decos, new fonts and accessibility settings, and a lot more.
+
+### The Dynamic layout
+
+- **A new Dynamic layout, with Spatial as its first theme**, and more themes to come. Your rooms
+  and friends float together in one space you can pan and zoom across. Drag the background to move,
+  scroll to zoom, and click a room (or scroll in on it) to fly into it. Scroll back out, or press
+  Esc, to leave. Your voice controls stay in a dock at the bottom wherever you are.
+- **Glass orbs.** Rooms, friends and people are glass orbs that catch the light. An orb without a
+  picture gets its own swirl of colour and marbled lines made from its name, so they're easy to tell
+  apart, and the swirl turns slowly while you hover it.
+- **Orbs light up.** Online rooms and friends glow in their own colour, friends softly amber when
+  away and red when busy. Offline ones look switched off, picture or pattern still showing. This
+  replaces the little status dots.
+- **A living background.** Dots drift behind everything and reach out to your pointer with fine
+  lines. Hovering an orb, the lines wrap round it as it grows and breathes; dragging one, they stay
+  locked on it. Circles gather the dots into a rippling ring when you drag something into them or
+  zoom in on one, and an orb you hover draws a looser ring round its circle.
+- **Right-click menus** are drawn in your theme, and the map is tucked behind a Map button.
+- **The original window stays**, now called the Lightweight layout. Pick Dynamic or Lightweight in
+  Settings, under Layout, from a preview of each in your colours, and switch at any time without
+  leaving your room or call.
+- **Chosen for your PC.** PCs with a graphics card start on Dynamic, and those without start on
+  Lightweight. The first time mæla opens after this update, a short tour shows what's new and
+  lets you pick.
+- **Bigger to start with.** Both layouts open a little larger, never more than most of your screen.
+- **Safe to try.** If the Dynamic layout ever has a problem, mæla switches to Lightweight with one
+  message, and your room or call keeps running.
+
+### Rooms, friends and circles
+
+- **One space for rooms and friends.** The Rooms and Friends tabs are gone: everything sorts into
+  circles. Rooms start in Rooms and friends in Friends, and any circle can hold both, so a friend's
+  room can sit with them.
+- **Put things where you like.** Drop a room or friend anywhere: into a circle, where it stays put
+  (the circle grows to fit), or out on its own. Hold an orb and scroll to make it bigger or smaller.
+  Drag a circle's name to move the whole circle.
+- **Make circles where you want them.** Right-click empty space for "New circle here". Right-click
+  a circle's name to tidy it back to the automatic layout, rename it or delete it, and right-click a
+  resized orb to reset its size. Circles and where you put things are kept on your PC only.
+- **A tidier side panel.** Its buttons are now "+ New" (host a room, join with a code, add a friend
+  or make a circle) and "My code", with Backup behind "...". Empty circles have a "+" too, and orbs
+  in no circle are listed under "Not in a circle".
+
+### Inside a room
+
+- **Channels spread round the room**, with everyone in them. Click a voice channel to move into it,
+  and double-click any channel to open its chat. Click the room's own orb to pull its channels in,
+  and again to let them out.
+- **See who's talking.** A line runs from everyone in voice to their channel. It lies flat while
+  they're quiet and becomes a live waveform in your highlight colour when they talk, bigger the
+  louder they are. Talkers grow and are pushed gently outwards by their own wave, loud ones nudge
+  their neighbours aside, and the talking ring takes your highlight colour.
+- **Profile cards grow out of people.** Rest on someone and their card appears; click them, or
+  someone in a list, and it opens out with your volume and mute for them, their stream, and the
+  host's move, kick and ban. Click your own picture in the dock and your card grows up out of it.
+- **Hosts can arrange the room.** Drag people between voice channels (anyone can drag themselves).
+  Drag a channel to slide it round the room or in and out, and hold it and scroll to resize it.
+  Everyone in the room sees it move live, and the layout is saved with the room for next time.
+- **Your highlight colour** replaces the fixed green for the room you're in, your channel and
+  "Voice connected".
+
+### Profiles
+
+- **Banners.** In Edit profile, give your card a banner: a colour, a gradient or a picture.
+- **Card decos** (Glow, Sparkles or Aurora) play on your card when people open it, and **picture
+  decos** (Orbit, Halo or Ripple) circle your picture on your card, in rooms and in the dock.
+  Sparkles and Orbit are on to start with.
+- **Dynamic effects**, in Settings, decides whether you see the decos people choose. It's on with
+  the Dynamic layout and off with Lightweight until you switch it, then stays how you set it.
+- Only a small copy of a banner picture is ever sent, made on your PC, and others only ever read
+  its pixels.
+
+### Voice
+
+- **A much stronger noise filter.** The new Strong noise filter, on to start with, uses RNNoise
+  (from Xiph), a small neural network built into mæla, to take out typing, clicks and other sudden
+  noises as well as fans and hum. It also decides when you're actually talking, so typing or noise
+  alone doesn't open your mic. It runs entirely on your PC, on a few percent of one core, and
+  learns, stores and sends nothing. Turn it off in Settings for the lighter original filter; a PC
+  that can't keep up switches back on its own.
+
+### Chat
+
+- **Pictures in chat**, in room channels and friend chats. Pick one with the picture button, or
+  paste one, a screenshot too, with Ctrl+V. Click a picture to see it full size and save it.
+- **Safe and private pictures.** Your PC rebuilds each picture from its pixels, at up to 1920
+  pixels across in full colour, so nothing else in the file (location, camera details, its name)
+  is ever sent. Everyone else only unpacks plain pixels with mæla's own small code, never running
+  an image decoder on a file from someone else. In rooms the host checks every picture before it's
+  posted; friend chat pictures come straight from your friend and are kept, encrypted, with the chat.
+- **YouTube links** show as a card with a Play button that opens the video in your browser. Nothing
+  is loaded from YouTube unless you click Show preview.
+- **Colour emoji** now show in the Dynamic layout's chat and statuses, as they do in Lightweight.
+
+### Look and accessibility
+
+- **Midnight is the new default colour**, a neon cyan and navy, in both layouts. If you'd already
+  chosen a colour, you keep it.
+- **Five new colours**: Synthwave, Forest, Ember, Ocean and Sakura, each with two accents, sorted
   with similar colours together. Browse them in Settings with the arrows either side, or the
   mouse wheel.
-- Right-click menus in Spatial are drawn in your theme, and the map is tucked behind a Map button.
+- **Your icons take your colour**: the window, taskbar and tray, and shortcuts to mæla on your
+  desktop, in the Start menu or pinned to the taskbar. mæla's own icon is now the blue Midnight logo.
+- **New fonts.** The Dynamic layout now uses Outfit, and you can pick OpenDyslexic (easier for some
+  readers with dyslexia), Atkinson Hyperlegible (for low vision), Lexend, Space Grotesk or Windows'
+  Segoe UI instead. All are free under the SIL Open Font License, built into mæla and never
+  downloaded. Initials on orbs follow your font.
+- **Text size** at 100, 115 or 130%, and the smallest text is a little bigger than before.
+- **Reduce motion** turns off the moving dots and lines, growing and breathing orbs, decos and
+  swirls, while everything still works.
+- **Motion** sets how often the Dynamic layout draws while things move: Smooth (every refresh, the
+  default), Balanced (half the refresh on screens over 100 Hz, evenly paced and lighter) or Light
+  (30 a second, for battery).
+- The font and text size apply in the Dynamic layout; Lightweight keeps Windows' font.
+
+### Works with older versions
+
+Everyone can still talk, chat and share screens together across versions. People on older versions
+don't see banners, decos, pictures or the host's arrangement of channels, and see a short
+"Sent a picture. Update mæla to see it." line in place of a picture. Hosts need this version
+for members to send pictures or see their channel layout.
+
+### Credits
+
+RNNoise (BSD licence), Outfit, Space Grotesk, Lexend, Atkinson Hyperlegible and OpenDyslexic (SIL
+Open Font License) and Twemoji (CC-BY 4.0) are listed with their licences in Settings, Licenses.
 
 ## 0.12.0 - Live stream changes and room art
 

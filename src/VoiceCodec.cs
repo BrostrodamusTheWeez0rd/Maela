@@ -66,6 +66,12 @@ namespace Maela
 #endif
         }
 
+        /// <summary>
+        /// How likely the frame is to be speech, from the Strong noise filter, or -1 when it isn't
+        /// on. With it, only speech opens the mic; without, a loud pitched sound does.
+        /// </summary>
+        public float VoiceProbability = -1;
+
         /// <summary>True while the gate is open (we are talking).</summary>
         public bool IsSpeaking { get { return _open; } }
 
@@ -95,7 +101,7 @@ namespace Maela
             // loud but have no pitch, so on their own they're never sent.
             bool loud = UpdateGate();
             bool voiced = _voicing.Analyze(_frame, FrameSamples);
-            bool speech = loud && voiced;
+            bool speech = VoiceProbability >= 0 ? loud && VoiceProbability >= 0.5f : loud && voiced;
 
 #if !MAELA_STUB_CODEC
             int length = _opus.Encode(_frame, 0, FrameSamples, _packet, 0, _packet.Length);

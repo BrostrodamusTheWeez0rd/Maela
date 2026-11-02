@@ -582,6 +582,11 @@ namespace Maela
         public int PreferredPort;
         public bool KeepAlive = true;
         public string Circle = String.Empty; // Which Spatial circle it sits in. Empty: the main one.
+        /// <summary>Hosted rooms: where the host put each channel, in ChannelNames order (see MainForm.Spatial.cs).</summary>
+        public string ChannelLayout = String.Empty;
+        /// <summary>Where it sits in the Dynamic layout, if you've placed it, and its size. Kept on this PC only.</summary>
+        public bool Placed;
+        public double PlaceX, PlaceY, Size = 1;
         public readonly List<string> ChannelNames = new List<string>();
         public RoomPresence Presence = RoomPresence.Unknown;
         public int MemberCount;
@@ -634,6 +639,43 @@ namespace Maela
         public override string ToString()
         {
             return Name;
+        }
+    }
+
+    /// <summary>
+    /// Where something sits in the Dynamic layout, as "x,y,size": x and y empty when it hasn't
+    /// been placed, so only a size is kept. Empty altogether for neither.
+    /// </summary>
+    internal static class SpatialPlace
+    {
+        private static readonly System.Globalization.CultureInfo Invariant = System.Globalization.CultureInfo.InvariantCulture;
+        private const double MaxCoordinate = 1000000;
+
+        public static string Format(bool placed, double x, double y, double size)
+        {
+            if (!placed && Math.Abs(size - 1) < 0.005)
+                return String.Empty;
+            return (placed ? x.ToString("0.#", Invariant) + "," + y.ToString("0.#", Invariant) : ",") + "," + size.ToString("0.##", Invariant);
+        }
+
+        public static void Parse(string text, out bool placed, out double x, out double y, out double size)
+        {
+            placed = false;
+            x = y = 0;
+            size = 1;
+            string[] parts = (text ?? String.Empty).Split(',');
+            if (parts.Length != 3)
+                return;
+            placed = Double.TryParse(parts[0], System.Globalization.NumberStyles.Float, Invariant, out x)
+                & Double.TryParse(parts[1], System.Globalization.NumberStyles.Float, Invariant, out y);
+            // "NaN" and "Infinity" parse too, and would break the layout: only a real place counts.
+            if (placed && !(Math.Abs(x) <= MaxCoordinate && Math.Abs(y) <= MaxCoordinate))
+                placed = false;
+            if (!placed)
+                x = y = 0;
+            if (!Double.TryParse(parts[2], System.Globalization.NumberStyles.Float, Invariant, out size) || Double.IsNaN(size))
+                size = 1;
+            size = Math.Max(0.6, Math.Min(1.8, size));
         }
     }
 
@@ -781,6 +823,10 @@ namespace Maela
                     }
                     if (parts.Length >= 11)
                         room.Circle = parts[10] == "1" ? "fav" : parts[10] == "0" ? String.Empty : parts[10];
+                    if (parts.Length >= 12)
+                        room.ChannelLayout = parts[11];
+                    if (parts.Length >= 13)
+                        SpatialPlace.Parse(parts[12], out room.Placed, out room.PlaceX, out room.PlaceY, out room.Size);
                     if (room.Owned && room.ChannelNames.Count == 0)
                         room.ChannelNames.Add("General");
                     if (String.IsNullOrWhiteSpace(room.Name))
@@ -813,7 +859,9 @@ namespace Maela
                         lines.Add((room.Owned ? "1" : "0") + "|" + room.PreferredPort + "|" + Encode(room.Name) + "|" + Encode(room.Invite) + "|" + (room.KeepAlive ? "1" : "0") + "|" + Encode(channelText) + "|" + key + "|" + password
                             + "|" + (room.IconBlob == null ? String.Empty : Convert.ToBase64String(room.IconBlob))
                             + "|" + (room.BannerBlob == null ? String.Empty : Convert.ToBase64String(room.BannerBlob))
-                            + "|" + (room.Circle ?? String.Empty));
+                            + "|" + (room.Circle ?? String.Empty)
+                            + "|" + (room.ChannelLayout ?? String.Empty)
+                            + "|" + SpatialPlace.Format(room.Placed, room.PlaceX, room.PlaceY, room.Size));
                     }
                     EncryptedFile.Write(FilePath, Encoding.UTF8.GetBytes(String.Join("\n", lines.ToArray())));
                     return true;
@@ -879,9 +927,31 @@ namespace Maela
         public string RoomCircles = String.Empty;
         public string FriendCircles = String.Empty;
         public string FriendCircleOf = String.Empty;
+        public string FriendPlaces = String.Empty; // Where you've placed friends in the Dynamic layout: "id:x,y,size;...".
         public bool LayoutChosen;               // Off: Spatial or Lightweight is picked by whether there's a graphics card.
         public string WhatsNewSeen = String.Empty; // The last announcement shown after an update.
+        // Your profile card's extras, shared with people in rooms (the banner picture is banner.bin).
+        public BannerKind Banner = BannerKind.Auto;
+        public int BannerColourA = 0x00E5F5;
+        public int BannerColourB = 0x7C4DFF;
+        public CardEffect CardEffect = CardEffect.Sparkles; // Everyone starts with these until they choose.
+        public PictureDeco PictureDeco = PictureDeco.Orbit;
+        // Seeing other people's card effects. Until you choose, it follows the layout: on with a
+        // Dynamic theme (Spatial), off with Lightweight.
+        public bool DynamicEffects;
+        public bool DynamicEffectsSet;
+
+        public bool ShowDynamicEffects { get { return DynamicEffectsSet ? DynamicEffects : !ClassicLayout; } }
+
+        // Accessibility. The reading font and text size apply in the Dynamic layout.
+        public int ReadingFont;       // A place in ReadingFonts.All: 0 Outfit, the default.
+        public int TextScale = 100;   // Percent: 100, 115 or 130.
+        public bool ReduceMotion;     // No moving dot effects, growing orbs, card decos or swirls.
+
+        /// <summary>Card and picture decos show: Dynamic effects on, and motion not reduced.</summary>
+        public bool ShowDecos { get { return ShowDynamicEffects && !ReduceMotion; } }
         public bool NoiseSuppression = true;
+        public bool StrongNoiseFilter = true; // RNNoise and a voice-only mic gate; off: the original filter.
         public bool SetupDone;
         public bool SoundEffects = true;
         public bool AutoGain = true;
@@ -895,6 +965,9 @@ namespace Maela
         public bool FriendsNoticeShown;
         public bool WindowsSetupOffered; // Asked once whether to set up the firewall and Defender.
         public StreamDecodeMode StreamDecode = StreamDecodeMode.Automatic;
+        // How often the Dynamic layout draws while things move: 0 Smooth (every refresh),
+        // 1 Balanced (half the refresh on screens over 100 Hz), 2 Light (30 a second). Smooth to start with.
+        public int FrameRate = 0;
         public int ShareHeight = 1080;
         public int ShareFps = 60;
         public bool ShareAudio = true;
@@ -915,9 +988,21 @@ namespace Maela
             p.RoomCircles = RoomCircles;
             p.FriendCircles = FriendCircles;
             p.FriendCircleOf = FriendCircleOf;
+            p.FriendPlaces = FriendPlaces;
             p.LayoutChosen = LayoutChosen;
             p.WhatsNewSeen = WhatsNewSeen;
+            p.Banner = Banner;
+            p.BannerColourA = BannerColourA;
+            p.BannerColourB = BannerColourB;
+            p.CardEffect = CardEffect;
+            p.PictureDeco = PictureDeco;
+            p.DynamicEffects = DynamicEffects;
+            p.DynamicEffectsSet = DynamicEffectsSet;
+            p.ReadingFont = ReadingFont;
+            p.TextScale = TextScale;
+            p.ReduceMotion = ReduceMotion;
             p.NoiseSuppression = NoiseSuppression;
+            p.StrongNoiseFilter = StrongNoiseFilter;
             p.SetupDone = SetupDone;
             p.SoundEffects = SoundEffects;
             p.AutoGain = AutoGain;
@@ -931,6 +1016,7 @@ namespace Maela
             p.FriendsNoticeShown = FriendsNoticeShown;
             p.WindowsSetupOffered = WindowsSetupOffered;
             p.StreamDecode = StreamDecode;
+            p.FrameRate = FrameRate;
             p.ShareHeight = ShareHeight;
             p.ShareFps = ShareFps;
             p.ShareAudio = ShareAudio;
@@ -940,9 +1026,12 @@ namespace Maela
 
     internal static class PreferencesStore
     {
+        /// <summary>Tests keep their settings away from the real ones.</summary>
+        internal static string FileForTests;
+
         private static string FilePath
         {
-            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Maela", "settings.txt"); }
+            get { return FileForTests ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Maela", "settings.txt"); }
         }
 
         public static AppPreferences Load()
@@ -1008,13 +1097,73 @@ namespace Maela
                         p.FriendCircles = value.Trim();
                     else if (key == "friendcircleof")
                         p.FriendCircleOf = value.Trim();
+                    else if (key == "friendplaces")
+                        p.FriendPlaces = value.Trim();
                     else if (key == "layoutchosen")
                         p.LayoutChosen = value.Trim() == "1";
                     else if (key == "whatsnew")
                         p.WhatsNewSeen = value.Trim();
+                    else if (key == "banner")
+                    {
+                        int kind;
+                        if (Int32.TryParse(value.Trim(), out kind) && kind >= 0 && kind <= (int)BannerKind.Picture)
+                            p.Banner = (BannerKind)kind;
+                    }
+                    else if (key == "bannera" || key == "bannerb")
+                    {
+                        int rgb;
+                        if (Int32.TryParse(value.Trim(), System.Globalization.NumberStyles.HexNumber, null, out rgb))
+                        {
+                            if (key == "bannera")
+                                p.BannerColourA = rgb & 0xFFFFFF;
+                            else
+                                p.BannerColourB = rgb & 0xFFFFFF;
+                        }
+                    }
+                    else if (key == "cardeffect")
+                    {
+                        int effect;
+                        if (Int32.TryParse(value.Trim(), out effect) && effect >= 0 && effect <= (int)CardEffect.Aurora)
+                            p.CardEffect = (CardEffect)effect;
+                    }
+                    else if (key == "readingfont")
+                    {
+                        int font;
+                        if (Int32.TryParse(value.Trim(), out font) && font >= 0 && font < ReadingFonts.All.Length)
+                            p.ReadingFont = font;
+                    }
+                    else if (key == "textscale")
+                    {
+                        int scale;
+                        if (Int32.TryParse(value.Trim(), out scale) && (scale == 100 || scale == 115 || scale == 130))
+                            p.TextScale = scale;
+                    }
+                    else if (key == "reducemotion")
+                        p.ReduceMotion = value.Trim() == "1";
+                    else if (key == "framerate")
+                    {
+                        int rate;
+                        if (Int32.TryParse(value.Trim(), out rate) && rate >= 0 && rate <= 2)
+                            p.FrameRate = rate;
+                    }
+                    else if (key == "picturedeco")
+                    {
+                        int deco;
+                        if (Int32.TryParse(value.Trim(), out deco) && deco >= 0 && deco <= (int)PictureDeco.Ripple)
+                            p.PictureDeco = (PictureDeco)deco;
+                    }
+                    else if (key == "dynamiceffects")
+                    {
+                        p.DynamicEffectsSet = value.Trim().Length > 0;
+                        p.DynamicEffects = value.Trim() == "1";
+                    }
                     else if (key == "noise")
                     {
                         p.NoiseSuppression = value != "0";
+                    }
+                    else if (key == "noisestrong")
+                    {
+                        p.StrongNoiseFilter = value.Trim() != "0";
                     }
                     else if (key == "setup")
                     {
@@ -1099,9 +1248,21 @@ namespace Maela
                     "roomcircles=" + (p.RoomCircles ?? String.Empty),
                     "friendcircles=" + (p.FriendCircles ?? String.Empty),
                     "friendcircleof=" + (p.FriendCircleOf ?? String.Empty),
+                    "friendplaces=" + (p.FriendPlaces ?? String.Empty),
                     "layoutchosen=" + (p.LayoutChosen ? "1" : "0"),
                     "whatsnew=" + (p.WhatsNewSeen ?? String.Empty),
+                    "banner=" + (int)p.Banner,
+                    "bannera=" + p.BannerColourA.ToString("X6"),
+                    "bannerb=" + p.BannerColourB.ToString("X6"),
+                    "cardeffect=" + (int)p.CardEffect,
+                    "picturedeco=" + (int)p.PictureDeco,
+                    "framerate=" + p.FrameRate,
+                    "readingfont=" + p.ReadingFont,
+                    "textscale=" + p.TextScale,
+                    "reducemotion=" + (p.ReduceMotion ? "1" : "0"),
+                    "dynamiceffects=" + (p.DynamicEffectsSet ? (p.DynamicEffects ? "1" : "0") : String.Empty),
                     "noise=" + (p.NoiseSuppression ? "1" : "0"),
+                    "noisestrong=" + (p.StrongNoiseFilter ? "1" : "0"),
                     "setup=" + (p.SetupDone ? "1" : "0"),
                     "sfx=" + (p.SoundEffects ? "1" : "0"),
                     "agc=" + (p.AutoGain ? "1" : "0"),
@@ -2795,6 +2956,10 @@ namespace Maela
                 _profileDownloads.Clear();
                 _advertisedProfiles.Clear();
                 _lastProfileChangeUtc.Clear();
+                ClearExtrasLocked();
+                _voiceLevels.Clear();
+                _channelLayouts.Clear();
+                _layoutBroadcastPending = false;
                 _peerVolumes.Clear();
                 _peerMutes.Clear();
                 _lastSpeakingUtc.Clear();
@@ -3039,10 +3204,14 @@ namespace Maela
 
             if (HandleHostChatPacket(known, packet))
                 return;
+            if (HandleHostPicturePacket(known, packet))
+                return;
 
             if (HandleHostRoomArtPacket(known, packet))
                 return;
             if (HandleHostProfilePacket(known, packet))
+                return;
+            if (HandleHostExtrasPacket(known, packet))
                 return;
 
             if (HandleHostStreamPacket(known, packet))
@@ -3135,6 +3304,7 @@ namespace Maela
                 _viewChannelId = channel;
                 _chatSyncedChannel = -1;
                 ProfileReconnected();
+                ExtrasReconnected();
                 lock (_stateLock)
                     ApplyLocalProfileLocked();
                 RequestChannel(channel);
@@ -3176,10 +3346,14 @@ namespace Maela
 
             if (HandleClientChatPacket(packet))
                 return;
+            if (HandleClientPicturePacket(packet))
+                return;
 
             if (HandleClientRoomArtPacket(packet))
                 return;
             if (HandleClientProfilePacket(packet))
+                return;
+            if (HandleClientExtrasPacket(packet))
                 return;
 
             if (HandleClientStreamPacket(packet))
@@ -3248,6 +3422,8 @@ namespace Maela
         {
             DateTime now = DateTime.UtcNow;
             PruneSecurityState();
+            HostLayoutMaintenance();
+            HostPictureMaintenance();
             HostStreamMaintenance(now);
             StreamLinkMaintenance(now);
             List<string> expired = new List<string>();
@@ -3330,7 +3506,9 @@ namespace Maela
                     SendPing();
                 }
                 ClientChatMaintenance(now, keepAliveDue);
+                ClientPictureMaintenance(now);
                 ClientProfileMaintenance(now);
+                ClientExtrasMaintenance(now);
                 StreamLinkMaintenance(now);
             }
         }
@@ -3381,8 +3559,11 @@ namespace Maela
                     _peerVolumes.Remove(removed.Id);
                     _peerMutes.Remove(removed.Id);
                     _lastSpeakingUtc.Remove(removed.Id);
+                    _voiceLevels.Remove(removed.Id);
                     _memberFlags.Remove(removed.Id);
                     ForgetProfileLocked(removed.Id);
+                    ForgetExtrasLocked(removed.Id);
+                    ForgetPicturesLocked(removed.Id);
                 }
             }
 
@@ -3499,6 +3680,8 @@ namespace Maela
                     writer.Write(roomName);
                 }
                 WriteRoomArtSection(writer);
+                WriteExtrasSection(writer); // Newer than room art, so older versions stop before it.
+                WriteChannelLayoutSection(writer);
             }
 
             writer.Flush();
@@ -3594,6 +3777,8 @@ namespace Maela
             // Extension sections (see BuildPeerListPayload). Unknown sections end parsing.
             HashSet<int> parsedTextChannels = new HashSet<int>();
             Dictionary<uint, uint> parsedProfiles = new Dictionary<uint, uint>();
+            Dictionary<uint, uint> parsedExtras = new Dictionary<uint, uint>();
+            Dictionary<int, ChannelLayout> parsedLayouts = new Dictionary<int, ChannelLayout>();
             Dictionary<uint, LiveStreamInfo> parsedStreams = new Dictionary<uint, LiveStreamInfo>();
             while (offset < payload.Length)
             {
@@ -3608,6 +3793,20 @@ namespace Maela
                 if (section == PeerListSectionProfiles)
                 {
                     offset = ReadProfileSection(payload, offset, parsedProfiles);
+                    if (offset < 0)
+                        break;
+                    continue;
+                }
+                if (section == PeerListSectionChannelLayout)
+                {
+                    offset = ReadChannelLayoutSection(payload, offset, parsedLayouts);
+                    if (offset < 0)
+                        break;
+                    continue;
+                }
+                if (section == PeerListSectionExtras)
+                {
+                    offset = ReadProfileSection(payload, offset, parsedExtras); // Same shape: (member, version) pairs.
                     if (offset < 0)
                         break;
                     continue;
@@ -3668,6 +3867,8 @@ namespace Maela
                 foreach (int textId in parsedTextChannels)
                     _channelKinds[textId] = ChannelKindText;
                 ApplyAdvertisedProfilesLocked(parsedProfiles);
+                ApplyAdvertisedExtrasLocked(parsedExtras);
+                ApplyChannelLayoutsLocked(parsedLayouts);
                 endedLinks = ApplyLiveStreamsLocked(parsedStreams);
                 if (_viewChannelId != 0 && !_channels.ContainsKey(_viewChannelId))
                     _viewChannelId = _channels.ContainsKey(1) ? 1 : 0;
@@ -3752,6 +3953,7 @@ namespace Maela
             }
             ApplyNoiseSuppression(pcm);
             ApplyAutoGain(pcm);
+            _voiceEncoder.VoiceProbability = _voiceProbability;
             ScalePcm16InPlace(pcm, _micVolumePercent / 100.0f);
 
             List<EncodedVoice> packets = _encodedScratch;
@@ -3768,8 +3970,12 @@ namespace Maela
 
             if (_voiceEncoder.IsSpeaking)
             {
+                float level = LevelOf(pcm);
                 lock (_stateLock)
+                {
                     _lastSpeakingUtc[_localId] = DateTime.UtcNow;
+                    NoteVoiceLevelLocked(_localId, level);
+                }
             }
             int i;
             for (i = 0; i < packets.Count; i++)
@@ -3847,6 +4053,11 @@ namespace Maela
             List<byte[]> frames = _decodedScratch;
             frames.Clear();
             decoder.Decode(sequence, opus, frames);
+            float loudest = 0f;
+            for (int f = 0; f < frames.Count; f++)
+                loudest = Math.Max(loudest, LevelOf(frames[f]));
+            lock (_stateLock)
+                NoteVoiceLevelLocked(senderId, loudest);
 
             Action<uint, byte[]> testSink = DecodedAudioForTests;
             int i;

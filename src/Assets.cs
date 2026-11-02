@@ -275,6 +275,25 @@ namespace Maela
             return parts;
         }
 
+        /// <summary>
+        /// An emoji's PNG, checked against the pack's hash again as it's read, or null if the
+        /// pack isn't installed and verified. For the Dynamic layout, which decodes it itself.
+        /// </summary>
+        public static byte[] GetPng(EmojiEntry entry)
+        {
+            if (entry == null || !_verified)
+                return null;
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(Path.Combine(Folder, entry.FileName + ".png"));
+                return AssetStore.HashMatches(bytes, entry.Sha256) ? bytes : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         /// <summary>The colour image for an emoji, or null if the pack isn't installed and verified.</summary>
         public static Image GetImage(EmojiEntry entry)
         {

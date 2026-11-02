@@ -264,8 +264,13 @@ namespace Maela
         /// </summary>
         private static bool AddChunk(Dictionary<uint, ProfileAssembly> table, uint key, uint version, int index, int count, int total, byte[] payload, int dataOffset)
         {
+            return AddChunk(table, key, version, index, count, total, payload, dataOffset, MaxProfileBytes);
+        }
+
+        private static bool AddChunk(Dictionary<uint, ProfileAssembly> table, uint key, uint version, int index, int count, int total, byte[] payload, int dataOffset, int maxBytes)
+        {
             int length = payload.Length - dataOffset;
-            if (total < 2 || total > MaxProfileBytes || count != ChunkCount(total) || count > MaxProfileChunks || index < 0 || index >= count)
+            if (total < 2 || total > maxBytes || count != ChunkCount(total) || count > ChunkCount(maxBytes) || index < 0 || index >= count)
                 return false;
             int expected = Math.Min(ProfileChunkBytes, total - index * ProfileChunkBytes);
             if (length != expected)

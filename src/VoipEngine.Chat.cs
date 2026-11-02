@@ -28,7 +28,7 @@ namespace Maela
         public bool Failed;         // Gave up waiting for the host.
         public bool IsLocal;
 
-        /// <summary>0 = text message, 1 = reaction toggle (Text is the emoji, TargetSequence the message).</summary>
+        /// <summary>0 = text message, 1 = reaction toggle (Text is the emoji, TargetSequence the message), 2 = picture (Text carries its marker).</summary>
         public byte Kind;
         public uint TargetSequence;
 
@@ -36,6 +36,9 @@ namespace Maela
 
         public const byte ChatKindText = 0;
         public const byte ChatKindReaction = 1;
+        public const byte ChatKindPicture = 2; // Only ever made by the host, once it has the picture and has checked it.
+
+        public bool IsPicture { get { return Kind == ChatKindPicture; } }
 
         // Client-side retry state.
         internal DateTime LastSentUtc;
@@ -186,6 +189,7 @@ namespace Maela
                 _chatSyncedChannel = -1;
                 _chatVersion++;
             }
+            ResetPictures();
         }
 
         private static string CleanChatText(string text)
@@ -440,6 +444,8 @@ namespace Maela
                 for (i = 0; i < _pendingChat.Count; i++)
                 {
                     ChatMessage pending = _pendingChat[i];
+                    if (pending.IsPicture)
+                        continue; // Offered again by ClientPictureMaintenance.
                     if (pending.Failed || (now - pending.LastSentUtc).TotalMilliseconds < ChatRetryMs)
                         continue;
                     if (pending.Attempts >= ChatMaxAttempts)
