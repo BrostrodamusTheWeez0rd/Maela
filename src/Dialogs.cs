@@ -249,6 +249,21 @@ namespace Maela
         }
     }
 
+    /// <summary>A short heads-up with a "Don't show me again" switch.</summary>
+    internal sealed class NoticeDialog : ThemedDialog
+    {
+        private readonly ToggleSwitch _dontShow;
+
+        public NoticeDialog(string title, string text) : base(title, 440, 224)
+        {
+            AddHeading(title, text);
+            _dontShow = AddToggle("Don't show me again", null, false);
+            AddButtons(Button("Cancel", DialogResult.Cancel), Button("Continue", DialogResult.OK));
+        }
+
+        public bool DontShowAgain { get { return _dontShow.Checked; } }
+    }
+
     internal static class TextPrompt
     {
         public static string Show(IWin32Window owner, string title, string label, string initialValue)
@@ -315,21 +330,18 @@ namespace Maela
     internal sealed class JoinRoomDialog : ThemedDialog
     {
         private readonly RoundField _invite;
-        private readonly RoundField _name;
         private readonly RoundField _password;
         private readonly ToggleSwitch _save;
 
         public string Invite { get { return _invite.Box.Text.Trim(); } }
-        public string RoomName { get { return String.IsNullOrWhiteSpace(_name.Box.Text) ? "Voice Room" : _name.Box.Text.Trim(); } }
         public bool SaveRoom { get { return _save.Checked; } }
         public string Password { get { return _password.Box.Text; } }
 
-        public JoinRoomDialog() : base("Join a room", 480, 480)
+        public JoinRoomDialog() : base("Join a room", 480, 400)
         {
             AddHeading("Join a room", "Paste the room code your friend sent you.");
             _invite = AddField("Room code", String.Empty, false);
             _invite.Box.Font = Ui.Mono;
-            _name = AddField("Name it", "Voice Room", false);
             _password = AddField("Room password (if the host set one)", String.Empty, true);
             _save = AddToggle("Save this room", null, true);
             FlatButton join = Button("Join", DialogResult.OK);
@@ -470,10 +482,28 @@ namespace Maela
                 Controls.Add(clearBans);
                 Cursor_Y += 30;
             }
+            FlatButton removeFirewall = new FlatButton();
+            removeFirewall.Text = "Remove firewall rule";
+            removeFirewall.SetBounds(Margin_X, Cursor_Y, 200, 36);
+            removeFirewall.Click += delegate { RemoveFirewallClicked(); };
+            Controls.Add(removeFirewall);
+            Cursor_Y += 48;
+            AddText("If Windows Defender wrongly flags m\u00E6la, you can exclude this file from scanning. Only do this if you got m\u00E6la from its official GitHub page.", theme.Text2, ClientSize.Width - Margin_X * 2);
+            FlatButton exclude = new FlatButton();
+            exclude.Text = "Add Defender exclusion";
+            exclude.SetBounds(Margin_X, Cursor_Y, 200, 36);
+            exclude.Click += delegate { DefenderClicked(true); };
+            Controls.Add(exclude);
+            FlatButton include = new FlatButton();
+            include.Text = "Remove exclusion";
+            include.SetBounds(Margin_X + 210, Cursor_Y, 170, 36);
+            include.Click += delegate { DefenderClicked(false); };
+            Controls.Add(include);
+            Cursor_Y += 48;
 
             AddSection("App");
             _closeToTray = AddToggle("Keep running in the tray when closed", "Closing the window keeps you in your room. Right-click the tray icon to quit.", _preferences.CloseToTray);
-            _directStreams = AddToggle("Connect directly for screen sharing", "On (default): best quality; the person sharing or watching can see your IP. Off: always go through the host.", _preferences.AllowDirectStreams);
+            _directStreams = AddToggle("Connect directly for screen sharing", "Best quality. Only share or watch with people you trust. Off: goes through the host.", _preferences.AllowDirectStreams);
             AddFieldLabel("Use the graphics card to decode streams you watch", Margin_X, Cursor_Y);
             Cursor_Y += 22;
             foreach (string mode in new string[] { "Automatic: at 1080p and above", "Always: fastest, at every size", "Never: processor only, best isolated" })
@@ -672,25 +702,53 @@ namespace Maela
 
         private void FirewallClicked(object sender, EventArgs e)
         {
-            try
+            ElevatedResult result = WindowsSecurity.AllowThroughFirewall(Application.ExecutablePath);
+            if (result == ElevatedResult.Cancelled)
+                return;
+            MessageBox.Show(this, result == ElevatedResult.Done ? "m\u00E6la is allowed through Windows Firewall." : "Windows did not add the firewall rule.", "Firewall", MessageBoxButtons.OK, result == ElevatedResult.Done ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+
+        private void RemoveFirewallClicked()
+        {
+            string path = Application.ExecutablePath;
+            if (WindowsSecurity.FirewallAllows(path) == false)
             {
-                string exePath = Application.ExecutablePath.Replace("\"", String.Empty);
-                string command = "netsh advfirewall firewall delete rule name=\"Maela Room\" >nul 2>&1 & netsh advfirewall firewall add rule name=\"Maela Room\" dir=in action=allow program=\"" + exePath + "\" protocol=UDP enable=yes profile=any";
-                ProcessStartInfo info = new ProcessStartInfo();
-                info.FileName = "cmd.exe";
-                info.Arguments = "/c " + command;
-                info.UseShellExecute = true;
-                info.Verb = "runas";
-                info.WindowStyle = ProcessWindowStyle.Hidden;
-                Process process = Process.Start(info);
-                if (process == null) throw new InvalidOperationException("Windows did not start the firewall helper.");
-                process.WaitForExit();
-                MessageBox.Show(this, process.ExitCode == 0 ? "mæla is allowed through Windows Firewall." : "Windows did not add the firewall rule.", "Firewall", MessageBoxButtons.OK, process.ExitCode == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                MessageBox.Show(this, "m\u00E6la doesn't have a firewall rule allowing it.", "Firewall", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
             }
-            catch (Exception ex)
+            if (MessageBox.Show(this, "Without the rule, friend requests from new people and members joining your rooms may be blocked. Windows will ask you to approve this.\r\n\r\nRemove it?", "Firewall", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            ElevatedResult result = WindowsSecurity.RemoveFromFirewall(path);
+            if (result == ElevatedResult.Cancelled)
+                return;
+            MessageBox.Show(this, result == ElevatedResult.Done ? "The firewall rule has been removed." : "Windows did not remove the firewall rule.", "Firewall", MessageBoxButtons.OK, result == ElevatedResult.Done ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+
+        private void DefenderClicked(bool exclude)
+        {
+            if (exclude && MessageBox.Show(this, "Windows Defender will stop scanning this copy of m\u00E6la. Windows will ask you to approve this.\r\n\r\nContinue?", "Defender exclusion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            ElevatedResult result = WindowsSecurity.SetDefenderExclusion(Application.ExecutablePath, exclude);
+            if (result == ElevatedResult.Cancelled)
+                return;
+            string manual = "Windows Security > Virus & threat protection > Manage settings > Exclusions";
+            string message;
+            switch (result)
             {
-                MessageBox.Show(this, ex.Message, "Firewall", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                case ElevatedResult.Done:
+                    message = exclude ? "m\u00E6la is now excluded from Defender scans." : "The exclusion has been removed.";
+                    break;
+                case ElevatedResult.DidNotPersist:
+                    message = "Windows didn't keep the change, probably because of Tamper Protection. You can do it by hand in " + manual + ".";
+                    break;
+                case ElevatedResult.Unavailable:
+                    message = "Defender didn't accept the change. It may not be your active antivirus. If it is, you can do it by hand in " + manual + ".";
+                    break;
+                default:
+                    message = "That didn't work. You can do it by hand in " + manual + ".";
+                    break;
             }
+            MessageBox.Show(this, message, "Defender exclusion", MessageBoxButtons.OK, result == ElevatedResult.Done ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         private static string ReadResource(string name, string fallback)

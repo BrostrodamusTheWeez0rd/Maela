@@ -544,7 +544,7 @@ namespace Maela
         public event Action<string, string> MessageReceived;
 
         /// <summary>Raised on the service's thread when someone sends you a friend request.</summary>
-        public event Action<string> RequestReceived;
+        public event Action<string, string> RequestReceived;
 
         /// <summary>Raised on the service's thread when someone accepts your friend request.</summary>
         public event Action<string> RequestAccepted;
@@ -1753,9 +1753,11 @@ namespace Maela
                 _people[person.Id] = person;
                 Save();
                 Bump();
-                Action<string> received2 = RequestReceived;
-                if (received2 != null)
-                    ThreadPool.QueueUserWorkItem(delegate { received2(person.Name); });
+                Action<string, string> requested = RequestReceived;
+                string requestId = person.Id;
+                string requestName = person.Name;
+                if (requested != null)
+                    ThreadPool.QueueUserWorkItem(delegate { requested(requestId, requestName); });
                 return;
             }
 

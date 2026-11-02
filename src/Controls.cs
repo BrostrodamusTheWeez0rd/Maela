@@ -227,6 +227,13 @@ namespace Maela
         /// <summary>Returns true if a room is live (hosted by us right now or seen online).</summary>
         public Func<SavedRoom, bool> IsLive { get; set; }
 
+        /// <summary>True while the Friends view is showing, so no room looks selected.</summary>
+        public bool FriendsSelected { get; set; }
+
+        /// <summary>Unread messages and requests, shown on the Friends button.</summary>
+        public int FriendsBadge { get; set; }
+
+        public event EventHandler FriendsClicked;
         public event Action<SavedRoom> RoomClicked;
         public event Action<SavedRoom, Point> RoomMenuRequested;
         public event Action<Point> AddClicked;
@@ -262,14 +269,14 @@ namespace Maela
             {
                 _hover = hit;
                 Invalidate();
-                string tip = hit >= 0 && hit < _rooms.Count ? _rooms[hit].Name : (hit == _rooms.Count ? "Host or join a room" : String.Empty);
+                string tip = hit == -1 ? "Friends" : (hit >= 0 && hit < _rooms.Count ? _rooms[hit].Name : (hit == _rooms.Count ? "Host or join a room" : String.Empty));
                 if (tip != _tipFor)
                 {
                     _tipFor = tip;
                     _tip.SetToolTip(this, tip);
                 }
             }
-            Cursor = hit >= 0 ? Cursors.Hand : Cursors.Default;
+            Cursor = hit >= -1 ? Cursors.Hand : Cursors.Default;
             base.OnMouseMove(e);
         }
 
@@ -291,7 +298,12 @@ namespace Maela
         protected override void OnMouseUp(MouseEventArgs e)
         {
             int hit = HitTest(e.Location);
-            if (hit >= 0 && hit < _rooms.Count)
+            if (hit == -1)
+            {
+                if (e.Button == MouseButtons.Left && FriendsClicked != null)
+                    FriendsClicked(this, EventArgs.Empty);
+            }
+            else if (hit >= 0 && hit < _rooms.Count)
             {
                 if (e.Button == MouseButtons.Right)
                 {
@@ -317,6 +329,18 @@ namespace Maela
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.DrawImage(_mark, mark);
             }
+            if (FriendsSelected || _hover == -1)
+            {
+                int h = FriendsSelected ? 36 : 18;
+                Ui.FillRound(g, t.Text, new RectangleF(-4, mark.Top + (Tile - h) / 2f, 8, h), 4);
+            }
+            if (FriendsBadge > 0)
+            {
+                Rectangle badge = new Rectangle(mark.Right - 16, mark.Bottom - 16, 22, 20);
+                Ui.FillRound(g, t.Rail, new RectangleF(badge.X - 2, badge.Y - 2, badge.Width + 4, badge.Height + 4), 12);
+                Ui.FillRound(g, t.Accent, badge, 10);
+                Ui.DrawText(g, FriendsBadge > 99 ? "99" : FriendsBadge.ToString(), Ui.SmallBold, badge, t.OnAccent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
             using (SolidBrush sep = new SolidBrush(t.Line))
                 g.FillRectangle(sep, (Width - 30) / 2, mark.Bottom + 10, 30, 2);
 
@@ -327,7 +351,7 @@ namespace Maela
                 Rectangle r = TileRect(i);
                 if (r.Bottom < 0 || r.Top > Height)
                     continue;
-                bool selected = Object.ReferenceEquals(room, Selected);
+                bool selected = !FriendsSelected && Object.ReferenceEquals(room, Selected);
                 Color baseColor = Ui.ColorForName(room.Name);
                 using (GraphicsPath path = Ui.RoundRect(r, selected || _hover == i ? 15 : 18))
                 using (LinearGradientBrush brush = new LinearGradientBrush(r, Ui.Mix(baseColor, Color.White, 0.18f), Ui.Mix(baseColor, Color.Black, 0.18f), 45f))

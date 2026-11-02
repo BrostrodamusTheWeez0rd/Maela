@@ -548,6 +548,7 @@ namespace Maela
         public bool StreamNoticeShown;
         public FriendStatus FriendStatus = FriendStatus.Offline; // Friends stay off until you choose to go online.
         public bool FriendsNoticeShown;
+        public bool WindowsSetupOffered; // Asked once whether to set up the firewall and Defender.
         public StreamDecodeMode StreamDecode = StreamDecodeMode.Automatic;
         public int ShareHeight = 1080;
         public int ShareFps = 60;
@@ -577,6 +578,7 @@ namespace Maela
             p.StreamNoticeShown = StreamNoticeShown;
             p.FriendStatus = FriendStatus;
             p.FriendsNoticeShown = FriendsNoticeShown;
+            p.WindowsSetupOffered = WindowsSetupOffered;
             p.StreamDecode = StreamDecode;
             p.ShareHeight = ShareHeight;
             p.ShareFps = ShareFps;
@@ -682,6 +684,8 @@ namespace Maela
                     }
                     else if (key == "friendsnotice")
                         p.FriendsNoticeShown = value == "1";
+                    else if (key == "windowssetup")
+                        p.WindowsSetupOffered = value == "1";
                     else if (key == "streamdecode")
                         p.StreamDecode = value == "1" ? StreamDecodeMode.Always : value == "2" ? StreamDecodeMode.Never : StreamDecodeMode.Automatic;
                     else if (key == "shareheight")
@@ -738,6 +742,7 @@ namespace Maela
                     "streamnotice=" + (p.StreamNoticeShown ? "1" : "0"),
                     "friendstatus=" + (byte)p.FriendStatus,
                     "friendsnotice=" + (p.FriendsNoticeShown ? "1" : "0"),
+                    "windowssetup=" + (p.WindowsSetupOffered ? "1" : "0"),
                     "streamdecode=" + (int)p.StreamDecode,
                     "shareheight=" + p.ShareHeight,
                     "sharefps=" + p.ShareFps,
@@ -2289,6 +2294,7 @@ namespace Maela
         /// <param name="password">Optional room password.</param>
         public void StartHost(int port, string name, string roomName, IList<string> channelNames, byte[] hostPrivateKey, string password)
         {
+            _roomName = CleanRoomName(roomName);
             if (_running)
                 throw new InvalidOperationException("Voice is already running.");
 
@@ -3108,6 +3114,15 @@ namespace Maela
                 }
                 WriteProfileSection(writer);
                 WriteStreamSection(writer);
+
+                // Last: older versions stop reading at a section they don't know.
+                byte[] roomName = Encoding.UTF8.GetBytes(_roomName ?? String.Empty);
+                if (roomName.Length > 0 && roomName.Length <= 255)
+                {
+                    writer.Write(PeerListSectionRoomName);
+                    writer.Write((byte)roomName.Length);
+                    writer.Write(roomName);
+                }
             }
 
             writer.Flush();
@@ -3115,6 +3130,32 @@ namespace Maela
         }
 
         private const byte PeerListSectionTextChannels = 1;
+        private const byte PeerListSectionRoomName = 4;
+        private const int MaxRoomNameChars = 40;
+        private volatile string _roomName = String.Empty;
+
+        /// <summary>The name the host gave this room, for everyone in it. Empty until it's known.</summary>
+        public string RoomName { get { return _roomName ?? String.Empty; } }
+
+        /// <summary>Hosts choose freely, so invisible and direction-changing characters are removed.</summary>
+        internal static string CleanRoomName(string name)
+        {
+            if (String.IsNullOrEmpty(name))
+                return String.Empty;
+            StringBuilder clean = new StringBuilder();
+            foreach (char c in name)
+            {
+                if (Char.IsControl(c) || Char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.Format)
+                    continue;
+                clean.Append(c);
+            }
+            string result = clean.ToString().Trim();
+            if (result.Length > MaxRoomNameChars)
+                result = result.Substring(0, MaxRoomNameChars).Trim();
+            if (result.Length > 0 && Char.IsHighSurrogate(result[result.Length - 1]))
+                result = result.Substring(0, result.Length - 1);
+            return result;
+        }
 
         private void ParsePeerList(byte[] payload)
         {
@@ -3193,6 +3234,15 @@ namespace Maela
                     offset = ReadProfileSection(payload, offset, parsedProfiles);
                     if (offset < 0)
                         break;
+                    continue;
+                }
+                if (section == PeerListSectionRoomName)
+                {
+                    if (offset >= payload.Length || offset + 1 + payload[offset] > payload.Length)
+                        break;
+                    int roomNameLength = payload[offset++];
+                    _roomName = CleanRoomName(Encoding.UTF8.GetString(payload, offset, roomNameLength));
+                    offset += roomNameLength;
                     continue;
                 }
                 if (section != PeerListSectionTextChannels || offset >= payload.Length)

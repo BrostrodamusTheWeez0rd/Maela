@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.1 - Friends view and easier requests
+
+- **Friends get their own view.** The mæla icon at the top of the room list opens Friends in the
+  main window; clicking a room goes back. Requests and unread messages show on the icon. Your status
+  is there and in the tray.
+- **Rooms use the host's name.** Everyone sees the name the host chose, and joining no longer asks
+  you to name it. Hosts need this version for members to see it.
+- **Friend requests pop up.** When someone adds you, a window asks straight away, with a check to
+  accept and an X to decline. On Busy, the request waits quietly in your friends list.
+- **Shorter notices.** The screen sharing and friends notices are now one line, each with a Don't
+  show me again switch.
+- **Windows setup, if you want it.** First-time setup, or your first launch of this version, offers
+  to allow mæla through Windows Firewall and exclude it from Defender. Nothing changes unless you
+  choose it. Without the firewall rule, a request from someone new can be blocked silently, so the
+  Friends window warns you and offers to fix it. You can add or remove either one any time in
+  Settings > Network.
+
 ## 0.11.0 - Friends
 
 - **Friends.** Everyone gets a friend code. Paste someone's code to send a request; once they

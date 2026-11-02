@@ -13,14 +13,19 @@ Before tagging a public build:
 - [ ] Saved rooms survive restart; each is probed once at startup (not repeatedly), and "Check if online" refreshes one.
 - [ ] Rooms saved by the previous version convert on first launch: `rooms-v2.txt` is gone, `rooms-v3.dat` isn't readable, and every room is still listed.
 - [ ] A `rooms-v3.dat` replaced with junk shows the "couldn't be opened" warning and is kept as `rooms-v3.unreadable`.
-- [ ] Friends between two machines on different networks: first-time notice, copy a code, send a request, accept, chat both ways; nothing can be sent before accepting.
+- [ ] Friends between two machines on different networks: notice with Don't show me again, copy a code, send a request, accept, chat both ways; nothing can be sent before accepting.
 - [ ] Friend statuses: Away and Busy show to friends; Busy makes no sound; Offline shows as offline and messages arrive after coming back.
 - [ ] Friends and queued messages survive restarting both machines; pasting a friend's new code updates them with no new request.
 - [ ] Backup and restore: back up on one PC, restore on another with the right password (a wrong one is refused), a friend pastes the new code, and messages flow both ways with no new request.
 - [ ] Friend calls between two machines on different networks: ring, accept, talk both ways, and hanging up on either side ends it for both. Declining, nobody answering and Busy (a missed call in the chat) all behave.
 - [ ] A call from inside a room asks first. Password rooms work with both sides on this version, and an older client can still join an updated host.
 - [ ] Friend chats: colour emoji and the picker work, reactions show on both sides and clicking one takes yours away, and search filters and highlights.
-- [ ] Friends window looks right in each theme, and blocking and removing work from the right-click menu.
+- [ ] A friend request pops up on the receiver with a check and an X; Busy shows no pop-up and keeps the request in the list.
+- [ ] First launch of this version offers the firewall rule and Defender exclusion once; Not now changes nothing and doesn't ask again. With the rule, a one-way friend request arrives; without it, the Friends window warns and can fix it. Settings > Network can add and remove both.
+- [ ] Defender exclusion: add and remove report correctly, and show the manual steps if Tamper Protection blocks them.
+- [ ] The mæla icon opens Friends in the main window and a room tile goes back, without mixing them; the badge counts unread and requests; during a call, Friends offers a way back to it.
+- [ ] Joining asks for no name; the room takes the host's name, for saved rooms too, and a host renaming shows for members next time they connect.
+- [ ] Friends looks right in each theme, and blocking and removing work from the right-click menu.
 - [ ] Host can create/rename/delete voice channels.
 - [ ] Channel switching does not reconnect the room socket.
 - [ ] Audio is only delivered inside the current voice channel.
@@ -63,6 +68,6 @@ Before tagging a public build:
       the red bar shows viewers; Stop works; leaving voice stops sharing.
 - [ ] Watch: LIVE badge, double-click and the card's Watch stream open the viewer; full screen
       works; the picture is smooth at 1080p60 between two PCs on different networks.
-- [ ] The first-time direct-connection notice appears; "always through the host" works.
+- [ ] The screen sharing notice appears until Don't show me again is on; Cancel stops; "always through the host" in Settings works.
 - [ ] Settings > Licenses shows the MIT license and third-party notices.
 - [ ] `package_release.cmd` produces the expected release ZIP.

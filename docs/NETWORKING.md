@@ -84,8 +84,11 @@ authentication, arrives twice, or is older than the 1,024-packet replay window.
   extension section 2, so clients fetch only what changed. A profile is at most 16 KB: a status
   line of up to 60 characters and 80×80 RGB565 pixels compressed with Deflate. Receivers
   inflate to exactly 12,800 bytes or reject it; no image decoder runs on received data.
-- Older versions stop reading the peer list after the member entries, so extension sections
-  are ignored by them.
+- Older versions stop reading the peer list after the member entries, or at a section they don't
+  know, so extension sections are ignored by them.
+- The room's name is in peer-list section 4 (length byte, UTF-8, at most 40 characters), so everyone
+  sees the name the host chose. Room codes don't carry it. A room joined from a host too old to send
+  it stays "Voice Room".
 
 ### Screen sharing
 

@@ -61,8 +61,10 @@ namespace Maela
             {
                 return (_engine != null && _engine.IsRunning && Object.ReferenceEquals(room, _activeSavedRoom)) || room.Presence == RoomPresence.Online;
             };
+            _rail.FriendsClicked += delegate { ShowFriendsView(); };
             _rail.RoomClicked += delegate(SavedRoom room)
             {
+                ShowRoomsView();
                 // One room at a time: opening another room leaves the current one.
                 if (_engine != null && _engine.IsRunning && !Object.ReferenceEquals(room, _activeSavedRoom))
                 {
@@ -86,6 +88,7 @@ namespace Maela
             };
             _rail.RoomMenuRequested += delegate(SavedRoom room, Point at)
             {
+                ShowRoomsView();
                 _selectedRoom = room;
                 _rail.Selected = room;
                 _rail.Invalidate();
@@ -122,7 +125,6 @@ namespace Maela
             _actionPanel.PrimaryButton.Click += RoomActionClicked;
             _actionPanel.SecondaryButton.Click += delegate { StopEngine(); };
             cardHost.Controls.Add(_actionPanel);
-            BuildFriendsBar();
             _sidebar.Controls.Add(_userBar); // Added after the card so it docks at the very bottom.
 
             _roomHeader.Dock = DockStyle.Top;

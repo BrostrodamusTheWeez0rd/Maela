@@ -812,6 +812,33 @@ namespace Maela.Tests
             Check(chat.Entries.Count == 1 && chat.Entries[0].Text == "old message" && chat.Entries[0].MessageId == 0, "older chat files still load");
         }
 
+        static void WindowsSettings()
+        {
+            Check(!WindowsSecurity.FirewallAllows(@"C:\no\such\folder\never-installed.exe"), "an exe with no rule isn't reported as allowed");
+            string script = WindowsSecurity.DefenderScript(@"C:\it's a path\Maela.exe", true);
+            Check(script.Contains("Add-MpPreference") && script.Contains(@"'C:\it''s a path\Maela.exe'"), "a path with a quote stays inside its quotes");
+            Check(WindowsSecurity.DefenderScript(@"C:\a.exe", false).Contains("Remove-MpPreference"), "removing uses the remove command");
+            Check(Encoding.Unicode.GetString(Convert.FromBase64String(WindowsSecurity.Encode(script))) == script, "the script survives encoding");
+            AppPreferences defaults = new AppPreferences();
+            Check(!defaults.WindowsSetupOffered, "a new install hasn't been offered Windows setup yet");
+        }
+
+        static void RoomNames()
+        {
+            VoipEngine host = new VoipEngine();
+            host.HeadlessForTests = true;
+            host.StartHost(0, "Host", "Friday Night", new List<string>(new string[] { "General" }), VoipEngineTestKeys.HostPrivateKey, null);
+            VoipEngine client = new VoipEngine();
+            client.HeadlessForTests = true;
+            Check(client.RoomName == "", "a member has no room name before joining");
+            client.StartClient(new IPEndPoint(IPAddress.Loopback, host.BoundPort), "Member", VoipEngineTestKeys.HostFingerprint, null);
+            Check(WaitFor(delegate { return client.RoomName == "Friday Night"; }, 8000), "members get the name the host chose");
+            client.Dispose();
+            host.Dispose();
+            Check(VoipEngine.CleanRoomName("Room\u202E\u0000 One") == "Room One", "room names lose invisible and direction characters");
+            Check(VoipEngine.CleanRoomName(new string('x', 500)).Length == 40, "room names are cut to 40 characters");
+        }
+
         static void Sanitising()
         {
             Check(FriendService.CleanName("Bob‮evil\u0000\n") == "Bobevil", "names lose invisible and direction characters");
@@ -837,6 +864,8 @@ namespace Maela.Tests
                 NameChanges();
                 Calls();
                 Reactions();
+                WindowsSettings();
+                RoomNames();
                 BlockAndRemove();
                 Isolation();
                 NothingReadableOnDisk();

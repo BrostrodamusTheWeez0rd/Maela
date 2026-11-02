@@ -253,27 +253,21 @@ namespace Maela
 
         // ----- Shared helpers -----
 
-        /// <summary>
-        /// First time only: explain that a direct connection shows the other person your IP
-        /// address, and offer to always go through the host instead.
-        /// </summary>
+        /// <summary>A short reminder before sharing or watching, until you turn it off.</summary>
         private bool ConfirmDirectNotice()
         {
             if (_preferences.StreamNoticeShown || !_preferences.AllowDirectStreams)
                 return true;
-            DialogResult answer = MessageBox.Show(this,
-                "Screen sharing connects you straight to the people sharing or watching, for the best quality. " +
-                "That means they can see your IP address (nobody else in the room can).\r\n\r\n" +
-                "Yes: connect directly (recommended).\r\nNo: always go through the host instead (lower quality, keeps your IP private).\r\n\r\n" +
-                "You can change this later in Settings.",
-                "Screen sharing", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Information);
-            if (answer == DialogResult.Cancel)
-                return false;
-            _preferences.StreamNoticeShown = true;
-            _preferences.AllowDirectStreams = answer == DialogResult.Yes;
-            PreferencesStore.Save(_preferences);
-            if (_engine != null)
-                _engine.AllowDirectStreams = _preferences.AllowDirectStreams;
+            using (NoticeDialog notice = new NoticeDialog("Screen sharing", "Only share or watch screens with people you trust."))
+            {
+                if (notice.ShowDialog(this) != DialogResult.OK)
+                    return false;
+                if (notice.DontShowAgain)
+                {
+                    _preferences.StreamNoticeShown = true;
+                    PreferencesStore.Save(_preferences);
+                }
+            }
             return true;
         }
 

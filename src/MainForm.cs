@@ -698,8 +698,7 @@ namespace Maela
             JoinRoomDialog dialog = new JoinRoomDialog();
             if (dialog.ShowDialog(this) == DialogResult.OK)
             {
-                SavedRoom room = new SavedRoom();
-                room.Name = dialog.RoomName;
+                SavedRoom room = new SavedRoom(); // Named by the host once connected.
                 room.Invite = dialog.Invite;
                 room.Password = dialog.Password;
                 room.Owned = false;
@@ -717,7 +716,6 @@ namespace Maela
                     else
                     {
                         // Same room (same host key), possibly with a new code: keep one entry, up to date.
-                        duplicate.Name = dialog.RoomName;
                         duplicate.Invite = room.Invite;
                         if (!String.IsNullOrEmpty(room.Password))
                             duplicate.Password = room.Password;
@@ -754,6 +752,7 @@ namespace Maela
 
         private void StartHostRoom(SavedRoom room, int requestedPort, bool saved)
         {
+            ShowRoomsView();
             StopEngine();
             try
             {
@@ -801,6 +800,7 @@ namespace Maela
 
         private void StartJoinRoom(SavedRoom room)
         {
+            ShowRoomsView();
             StopEngine();
             try
             {

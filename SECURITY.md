@@ -46,7 +46,7 @@ or plays; it is never treated as a file or a command.
 |---|---|---|
 | Hear you, read your messages in channels they're in or have open | Yes | That's what a room is for. |
 | See your display name, profile picture and status | Yes | Only what you chose to share. |
-| See your IP address | **Host**, plus the people you share a screen with or watch | Members connect to the host. Screen sharing connects sharer and viewer directly (mæla explains this first); turn that off in Settings to always go through the host. |
+| See your IP address | **Host**, plus the people you share a screen with or watch | Members connect to the host. Screen sharing connects sharer and viewer directly, so mæla reminds you to do it only with people you trust; turn that off in Settings to always go through the host. |
 | Watch your screen | Only when you choose to share, and only people in your voice channel who click Watch | You pick a screen or a single window; a red bar shows you're live. |
 | Hear your PC's sound | Only those same viewers, when you leave Share sound on | Sharing a screen sends what your programs play, except mæla's own sound. Sharing a window sends only that program's sound. Encrypted like the video. |
 | Break into your PC with a crafted video stream | Contained, with one exception | Streams are decoded in a separate viewer at Low integrity inside a restricted job: no writing to your files, no starting programs, no clipboard. **Exception:** at 1080p and above, by default, decoding happens on your graphics card, and the sandbox protects less against a bug in the graphics driver. mæla checks the stream first and allows only the kind of video its own encoders make. To keep all decoding on the processor, choose Never under Settings > App. |
@@ -65,6 +65,14 @@ and (as above) hear and read everything in their room.
 
 Friends stay off until you first choose a status other than Offline. While you're online, mæla
 runs a small listener on your PC and asks your router to open a port for it.
+
+mæla changes Windows settings only when you choose to. First-time setup, or your first launch of
+this version, offers both of these once, and they're also in Settings > Network. Each goes through
+the Windows approval prompt and affects only this exe:
+
+- **A firewall rule** allowing inbound UDP. Without it, requests from new people may not arrive.
+- **A Defender exclusion,** off by default. An excluded file isn't scanned, so a tampered copy
+  wouldn't be caught. Only use it on a copy from the official GitHub releases.
 
 | Threat | Protected? | How |
 |---|---|---|

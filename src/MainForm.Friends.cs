@@ -14,11 +14,12 @@ namespace Maela
     internal sealed partial class MainForm
     {
         private FriendService _friends;
-        private FriendsWindow _friendsWindow;
+        private FriendsView _friendsView;
         private UpnpPortMapping _friendMapping;
         private int _friendNetworkGeneration;
         private int _friendsVersionShown = -1;
         private bool _friendAddressChanged;
+        private bool _friendsNoticeThisRun;
         private string _sentFriendName;
         private string _callFriendId;
         private string _callPassword;
@@ -28,35 +29,36 @@ namespace Maela
         private bool _callHadCompany;
         private DateTime _callRoomStageUtc = DateTime.MinValue;
         private IncomingCallForm _incomingCall;
-        private readonly FlatButton _friendsButton = new FlatButton();
-        private readonly FlatButton _statusButton = new FlatButton();
         private readonly System.Windows.Forms.Timer _friendAddressTimer = new System.Windows.Forms.Timer();
 
-        private void BuildFriendsBar()
+        /// <summary>Friends fill the window, like a room does. The rail switches between them.</summary>
+        internal void ShowFriendsView()
         {
-            Panel row = new Panel();
-            row.Dock = DockStyle.Bottom;
-            row.Height = 42;
-            _friendsButton.Look = ButtonLook.Ghost;
-            _friendsButton.Text = "Friends";
-            _friendsButton.Click += delegate { ShowFriendsWindow(); };
-            _statusButton.Look = ButtonLook.Ghost;
-            _statusButton.Click += delegate
-            {
-                ContextMenuStrip menu = new ContextMenuStrip();
-                menu.Renderer = new ThemedMenuRenderer();
-                AddStatusItems(menu.Items);
-                menu.Show(_statusButton, new Point(0, _statusButton.Height));
-            };
-            _toolTip.SetToolTip(_statusButton, "Your status. Offline turns friends off completely.");
-            row.Controls.Add(_friendsButton);
-            row.Controls.Add(_statusButton);
-            row.Resize += delegate
-            {
-                _friendsButton.SetBounds(10, 4, 112, 34);
-                _statusButton.SetBounds(row.Width - 136, 4, 126, 34);
-            };
-            _sidebar.Controls.Add(row);
+            if (_friendsView == null)
+                return;
+            _sidebar.Visible = false;
+            _main.Visible = false;
+            _friendsView.Visible = true;
+            _friendsView.BringToFront();
+            _rail.BringToFront();
+            _rail.FriendsSelected = true;
+            _rail.Invalidate();
+            if (_callFriendId != null && _callRoomStageUtc != DateTime.MinValue)
+                _friendsView.ShowCallInProgress();
+            if (_friendAddressChanged)
+                _friendsView.ShowAddressChanged();
+            _friendAddressChanged = false;
+        }
+
+        internal void ShowRoomsView()
+        {
+            if (_friendsView == null || !_friendsView.Visible)
+                return;
+            _friendsView.Visible = false;
+            _sidebar.Visible = true;
+            _main.Visible = true;
+            _rail.FriendsSelected = false;
+            _rail.Invalidate();
         }
 
         private void AddStatusItems(ToolStripItemCollection items)
@@ -100,12 +102,19 @@ namespace Maela
             }
             catch
             {
-                _friendsButton.Enabled = false;
-                _statusButton.Enabled = false;
                 return;
             }
+            _friendsView = new FriendsView(_friends);
+            _friendsView.ChangeStatus = SetMyStatus;
+            _friendsView.Call = StartFriendCall;
+            _friendsView.BuildStatusMenu = AddStatusItems;
+            _friendsView.ReturnToCall = ShowRoomsView;
+            _friendsView.Dock = DockStyle.Fill;
+            _friendsView.Visible = false;
+            Controls.Add(_friendsView);
+            Controls.SetChildIndex(_friendsView, Controls.Count - 1);
             _friends.MessageReceived += delegate(string id, string text) { OnFriendEvent(delegate { FriendMessageArrived(id); }); };
-            _friends.RequestReceived += delegate(string name) { OnFriendEvent(delegate { FriendAlert("Friend request from " + name); }); };
+            _friends.RequestReceived += delegate(string id, string name) { OnFriendEvent(delegate { ShowFriendRequest(id, name); }); };
             _friends.RequestAccepted += delegate(string name) { OnFriendEvent(delegate { FriendAlert(name + " accepted your friend request"); }); };
             _friends.CallEvent += delegate(FriendCallEvent kind, string id, string code, string password)
             {
@@ -115,6 +124,7 @@ namespace Maela
             {
                 UpdateFriendsBar();
                 TickFriendCall();
+                UseHostRoomName();
                 string name = _preferences.DisplayName;
                 if (name != _sentFriendName)
                 {
@@ -133,12 +143,16 @@ namespace Maela
         /// <summary>Warnings about your identity, and going back to the status you left on.</summary>
         private void ResumeFriends()
         {
+            OfferWindowsSetup();
             if (_friends == null)
                 return;
             if (_friends.IdentityWasLost)
                 MessageBox.Show(this, "Your friends list and friend code couldn't be opened. This usually happens after reinstalling Windows or on a different Windows account.\r\n\r\nThe old file has been kept, and you have a new friend code. Your friends will need to add you again.", "Friends", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             if (_preferences.FriendStatus != FriendStatus.Offline)
+            {
+                _friendsNoticeThisRun = true; // You already chose this; don't ask at every launch.
                 SetMyStatus(_preferences.FriendStatus);
+            }
         }
 
         private void ShutdownFriends()
@@ -146,8 +160,6 @@ namespace Maela
             NetworkChange.NetworkAddressChanged -= OnNetworkChangedForFriends;
             _friendAddressTimer.Stop();
             Interlocked.Increment(ref _friendNetworkGeneration);
-            if (_friendsWindow != null)
-                _friendsWindow.Close();
             if (_friendMapping != null)
             {
                 try { _friendMapping.Dispose(); } catch { }
@@ -171,16 +183,15 @@ namespace Maela
         {
             if (_friends == null)
                 return;
-            if (status != FriendStatus.Offline && !_preferences.FriendsNoticeShown)
+            if (status != FriendStatus.Offline && !_preferences.FriendsNoticeShown && !_friendsNoticeThisRun)
             {
-                DialogResult answer = MessageBox.Show(this,
-                    "Going online opens a small listener on your PC so friends can reach you, and asks your router to open a port for it. If your router can't tell mæla your public address, mæla asks api.ipify.org, the same as when you host a room.\r\n\r\n" +
-                    "Your friend code contains your IP address, so share it like a phone number. Without your code, nothing answers. With it, someone can only send a friend request, and can't message you until you accept.\r\n\r\n" +
-                    "Appear Offline at any time to turn all of this off. Go online?",
-                    "Friends", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
-                if (answer != DialogResult.Yes)
-                    return;
-                _preferences.FriendsNoticeShown = true;
+                using (NoticeDialog notice = new NoticeDialog("Friends", "Only share your friend code with people you trust."))
+                {
+                    if (notice.ShowDialog(this) != DialogResult.OK)
+                        return;
+                    _friendsNoticeThisRun = true;
+                    _preferences.FriendsNoticeShown = notice.DontShowAgain;
+                }
             }
 
             bool wasRunning = _friends.Status != FriendStatus.Offline;
@@ -207,6 +218,36 @@ namespace Maela
                 _friendAddressTimer.Start();
             }
             UpdateFriendsBar();
+        }
+
+        /// <summary>Asked once, at first-time setup or the first launch of this version. Nothing changes unless you choose it.</summary>
+        private void OfferWindowsSetup()
+        {
+            if (_preferences.WindowsSetupOffered)
+                return;
+            _preferences.WindowsSetupOffered = true;
+            PreferencesStore.Save(_preferences);
+            string path = Application.ExecutablePath;
+            using (WindowsSetupDialog dialog = new WindowsSetupDialog(WindowsSecurity.FirewallAllows(path)))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK)
+                    return;
+                string problems = String.Empty;
+                if (dialog.AllowFirewall)
+                {
+                    ElevatedResult firewall = WindowsSecurity.AllowThroughFirewall(path);
+                    if (firewall != ElevatedResult.Done && firewall != ElevatedResult.Cancelled)
+                        problems += "Windows didn't add the firewall rule. You can try again in Settings > Network.\r\n\r\n";
+                }
+                if (dialog.ExcludeFromDefender)
+                {
+                    ElevatedResult defender = WindowsSecurity.SetDefenderExclusion(path, true);
+                    if (defender != ElevatedResult.Done && defender != ElevatedResult.Cancelled)
+                        problems += "Windows didn't keep the Defender exclusion. You can add it by hand in Windows Security > Virus & threat protection > Manage settings > Exclusions.";
+                }
+                if (problems.Length > 0)
+                    MessageBox.Show(this, problems.Trim(), "Windows setup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         /// <summary>The same steps as hosting: open a port, then work out your public address.</summary>
@@ -268,8 +309,11 @@ namespace Maela
             {
                 _friendAddressChanged = true;
                 FriendAlert("Your address changed. Friends who were offline may need your new code.");
-                if (_friendsWindow != null)
-                    _friendsWindow.ShowAddressChanged();
+                if (_friendsView != null && _friendsView.Visible)
+                {
+                    _friendsView.ShowAddressChanged();
+                    _friendAddressChanged = false;
+                }
             }
         }
 
@@ -314,13 +358,13 @@ namespace Maela
                 if (person.State == FriendState.RequestReceived)
                     waiting++;
             }
-            _friendsButton.Text = waiting > 0 ? "Friends (" + waiting + ")" : "Friends";
-            _statusButton.Text = "● " + StatusLabel(_friends.Status);
+            _rail.FriendsBadge = waiting;
+            _rail.Invalidate();
         }
 
         private void FriendMessageArrived(string id)
         {
-            if (_friendsWindow != null && _friendsWindow.IsReading(id))
+            if (_friendsView != null && _friendsView.IsReading(id))
             {
                 _friends.MarkRead(id);
                 return;
@@ -342,6 +386,24 @@ namespace Maela
                 ShowTrayTip("mæla", text); // Who it's from, never what it says.
             else
                 FlashForAttention();
+        }
+
+        /// <summary>Asks right away. Busy: no pop-up, and the request waits in your friends list.</summary>
+        private void ShowFriendRequest(string id, string name)
+        {
+            if (_friends.Status == FriendStatus.Busy)
+                return;
+            FriendAlert("Friend request from " + name);
+            string shortId = id.Substring(0, 4).ToUpperInvariant() + "-" + id.Substring(4, 4).ToUpperInvariant();
+            FriendRequestForm form = new FriendRequestForm(name, shortId);
+            form.Answered += delegate(bool accept)
+            {
+                if (accept)
+                    _friends.AcceptRequest(id);
+                else
+                    _friends.Block(id);
+            };
+            form.Show();
         }
 
         // ----- Calls: ringing goes through FriendService, the call itself is a private room. -----
@@ -401,8 +463,8 @@ namespace Maela
 
         private void ShowTrayOrFlash(string text)
         {
-            if (_friendsWindow != null)
-                _friendsWindow.ShowCallStatus(text);
+            if (_friendsView != null)
+                _friendsView.ShowCallStatus(text);
         }
 
         private void HandleCallEvent(FriendCallEvent kind, string id, string code, string password)
@@ -542,36 +604,32 @@ namespace Maela
             ShowTrayOrFlash(message);
         }
 
-        internal void ShowFriendsWindow()
+        /// <summary>Rooms carry the name their host gave them, for everyone in them.</summary>
+        private void UseHostRoomName()
         {
-            if (_friends == null)
+            VoipEngine engine = _engine;
+            if (engine == null || engine.IsHost || !engine.IsConnected || _callFriendId != null)
                 return;
-            if (_friendsWindow == null || _friendsWindow.IsDisposed)
+            string name = engine.RoomName;
+            if (name.Length == 0 || name == _activeRoomName)
+                return;
+            _activeRoomName = name;
+            SavedRoom room = _activeSavedRoom ?? _selectedRoom;
+            if (room != null && room.Name != name)
             {
-                _friendsWindow = new FriendsWindow(_friends);
-                _friendsWindow.ChangeStatus = SetMyStatus;
-                _friendsWindow.Call = StartFriendCall;
-                _friendsWindow.FormClosed += delegate { _friendsWindow = null; };
-                if (_friendAddressChanged)
-                    _friendsWindow.ShowAddressChanged();
+                room.Name = name;
+                if (_savedRooms.Contains(room))
+                {
+                    SavedRoomStore.Save(_savedRooms);
+                    RebuildRoomList(room);
+                }
             }
-            RestoreFromTrayIfHidden();
-            _friendsWindow.Show();
-            if (_friendsWindow.WindowState == FormWindowState.Minimized)
-                _friendsWindow.WindowState = FormWindowState.Normal;
-            _friendsWindow.Activate();
-            _friendAddressChanged = false;
-        }
-
-        private void RestoreFromTrayIfHidden()
-        {
-            if (!Visible)
-                RestoreFromTray();
+            UpdateSelectedRoomUi();
         }
     }
 
     /// <summary>Your friends on the left; on the right, the one chat you clicked.</summary>
-    internal sealed class FriendsWindow : Form
+    internal sealed class FriendsView : UserControl
     {
         private readonly FriendService _friends;
         private readonly Panel _left = new Panel();
@@ -599,22 +657,23 @@ namespace Maela
         private int _versionShown = -1;
         private bool _addressChanged;
         private string _callStatus;
+        private readonly bool _firewallBlocks = !WindowsSecurity.FirewallAllows(Application.ExecutablePath);
+        private bool _firewallDismissed;
         private readonly FlatButton _backupButton = new FlatButton();
 
         /// <summary>Goes through the app, which also opens and closes the router port.</summary>
         public Action<FriendStatus> ChangeStatus;
         public Action<string> Call;
+        public Action<ToolStripItemCollection> BuildStatusMenu;
+        public Action ReturnToCall;
+        private readonly FlatButton _statusButton = new FlatButton();
+        private bool _callInProgress;
         private readonly FlatButton _callButton = new FlatButton();
 
-        public FriendsWindow(FriendService friends)
+        public FriendsView(FriendService friends)
         {
             _friends = friends;
-            Text = "Friends";
-            ClientSize = new Size(860, 580);
-            MinimumSize = new Size(680, 440);
-            StartPosition = FormStartPosition.CenterParent;
             Font = Ui.Body;
-            try { Icon = Branding.LoadAppIcon(); } catch { }
 
             _right.Dock = DockStyle.Fill;
             Controls.Add(_right);
@@ -658,6 +717,22 @@ namespace Maela
             _list.MouseDown += ListMouseDown;
             _left.Controls.Add(_list);
             _left.Controls.Add(leftTop);
+            Panel statusRow = new Panel();
+            statusRow.Dock = DockStyle.Bottom;
+            statusRow.Height = 46;
+            _statusButton.Look = ButtonLook.Secondary;
+            _statusButton.SetBounds(12, 4, 246, 36);
+            _statusButton.Click += delegate
+            {
+                if (BuildStatusMenu == null)
+                    return;
+                ContextMenuStrip menu = new ContextMenuStrip();
+                menu.Renderer = new ThemedMenuRenderer();
+                BuildStatusMenu(menu.Items);
+                menu.Show(_statusButton, new Point(0, -menu.PreferredSize.Height));
+            };
+            statusRow.Controls.Add(_statusButton);
+            _left.Controls.Add(statusRow);
 
             Panel head = new Panel();
             head.Dock = DockStyle.Top;
@@ -727,13 +802,23 @@ namespace Maela
             {
                 if (_callStatus != null)
                 {
+                    bool goBack = _callInProgress;
                     _callStatus = null;
+                    _callInProgress = false;
                     RefreshNotice(null);
+                    if (goBack && ReturnToCall != null)
+                        ReturnToCall();
                 }
                 else if (_addressChanged)
                 {
                     _addressChanged = false;
                     CopyCode();
+                    RefreshNotice(null);
+                }
+                else if (_firewallBlocks && !_firewallDismissed && _friends.Status != FriendStatus.Offline)
+                {
+                    _firewallDismissed = true;
+                    WindowsSecurity.AllowThroughFirewall(Application.ExecutablePath);
                     RefreshNotice(null);
                 }
                 else if (!_friends.BackedUp && _friends.GetPeople().Count > 0)
@@ -790,7 +875,7 @@ namespace Maela
             _right.Controls.Add(head);
 
             Theme.Changed += ThemeChanged;
-            FormClosed += delegate
+            Disposed += delegate
             {
                 Theme.Changed -= ThemeChanged;
                 _timer.Stop();
@@ -801,12 +886,6 @@ namespace Maela
             _timer.Tick += delegate { RefreshAll(false); };
             _timer.Start();
             RefreshAll(true);
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            Ui.StyleWindowFrame(this);
         }
 
         private void ThemeChanged(object sender, EventArgs e)
@@ -848,13 +927,22 @@ namespace Maela
 
         public bool IsReading(string id)
         {
-            return Visible && WindowState != FormWindowState.Minimized && ContainsFocus && id == _selectedId;
+            return Visible && ContainsFocus && id == _selectedId;
         }
 
         /// <summary>Shows how a call is going, under the friend's name.</summary>
         public void ShowCallStatus(string text)
         {
             _callStatus = text;
+            _callInProgress = false;
+            RefreshAll(true);
+        }
+
+        /// <summary>A call has no tile in the rail, so this is the way back to it.</summary>
+        public void ShowCallInProgress()
+        {
+            _callStatus = "You're in a call. Click here to go back to it.";
+            _callInProgress = true;
             RefreshAll(true);
         }
 
@@ -1064,6 +1152,7 @@ namespace Maela
             if (!force && _friends.Version == _versionShown)
                 return;
             _versionShown = _friends.Version;
+            _statusButton.Text = "\u25CF  " + MainForm.StatusLabel(_friends.Status);
 
             List<FriendInfo> people = _friends.GetPeople();
             people.Sort(delegate(FriendInfo a, FriendInfo b)
@@ -1146,6 +1235,8 @@ namespace Maela
                 text = _callStatus;
             else if (_addressChanged)
                 text = "Your address changed. Friends who were offline may need your new code. Click to copy it.";
+            else if (_firewallBlocks && !_firewallDismissed && _friends.Status != FriendStatus.Offline)
+                text = "Windows Firewall may block friend requests from new people. Click to allow m\u00E6la through.";
             else if (_friends.Status == FriendStatus.Offline)
                 text = "You're appearing offline. Friends can't reach you, and anything you write waits here until you're both online.";
             else if (_updateCodeButton.Visible)
@@ -1299,5 +1390,58 @@ namespace Maela
                 Answered(accept);
             BeginInvoke((MethodInvoker)delegate { base.Close(); });
         }
+    }
+
+    /// <summary>Someone wants to be your friend. Closing it leaves the request in your friends list.</summary>
+    internal sealed class FriendRequestForm : ThemedDialog
+    {
+        public event Action<bool> Answered;
+
+        public FriendRequestForm(string name, string shortId) : base("Friend request", 400, 200)
+        {
+            TopMost = true;
+            StartPosition = FormStartPosition.CenterScreen;
+            AddHeading(name, "wants to be your friend  \u00B7  ID " + shortId);
+            FlatButton decline = Button(String.Empty, DialogResult.None);
+            FlatButton accept = Button(String.Empty, DialogResult.None);
+            decline.Icon = IconKind.Close;
+            accept.Icon = IconKind.Check;
+            decline.Click += delegate { Finish(false); };
+            accept.Click += delegate { Finish(true); };
+            AddButtons(decline, accept);
+            CancelButton = null;
+            AcceptButton = null; // A stray Enter mustn't accept anyone.
+            ToolTip tips = new ToolTip();
+            tips.SetToolTip(accept, "Accept");
+            tips.SetToolTip(decline, "Decline and block");
+        }
+
+        private void Finish(bool accept)
+        {
+            if (Answered != null)
+                Answered(accept);
+            Close();
+        }
+    }
+
+    /// <summary>The one-time offer. Windows asks you to approve each one you choose.</summary>
+    internal sealed class WindowsSetupDialog : ThemedDialog
+    {
+        private readonly ToggleSwitch _firewall;
+        private readonly ToggleSwitch _defender;
+
+        public WindowsSetupDialog(bool firewallAlreadyAllows) : base("Set up Windows", 560, firewallAlreadyAllows ? 300 : 360)
+        {
+            AddHeading("Set up Windows for m\u00E6la?", "Both are optional. Windows asks you to approve each one you choose.");
+            if (!firewallAlreadyAllows)
+                _firewall = AddToggle("Allow through Windows Firewall", "Lets friends and room members reach you. Without it, requests may not arrive.", true);
+            _defender = AddToggle("Exclude m\u00E6la from Defender scans", "For if Defender wrongly flags it. Excluded files aren't scanned.", false);
+            Cursor_Y += 4;
+            AddText("You can change either one any time in Settings > Network.", Theme.Current.Text, ClientSize.Width - Margin_X * 2);
+            AddButtons(Button("Not now", DialogResult.Cancel), Button("Continue", DialogResult.OK));
+        }
+
+        public bool AllowFirewall { get { return _firewall != null && _firewall.Checked; } }
+        public bool ExcludeFromDefender { get { return _defender.Checked; } }
     }
 }
