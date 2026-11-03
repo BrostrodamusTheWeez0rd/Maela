@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.2 - Clearer voice and steadier streams
+
+- **Clearer voice.** The Strong noise filter is gone: it made voices sound muffled without
+  taking out much more noise. The original noise filter is back, with a stricter mic gate. It
+  takes a moment of real talking to open, so a single knock or squeak doesn't, and it closes a
+  little sooner after you stop.
+- **Quieter pauses.** While your mic is open between words, background noise is turned down, and
+  the automatic mic level now only learns from your voice, so it never boosts the room instead.
+- **Your mic volume sticks.** The mic volume slider now applies after the automatic mic level,
+  which no longer undoes it.
+- **Steadier streams.** The Dynamic layout no longer does its background work while it's hidden
+  or minimized, and does much less while it's behind other windows, so screen sharing doesn't
+  stutter. While you share your screen it also draws at most about 60 frames a second, leaving
+  your graphics card to the stream.
+
 ## 0.13.1 - Skip the tour
 
 - **Skip tour.** The tour of what's new now has a Skip tour button that goes straight to choosing
