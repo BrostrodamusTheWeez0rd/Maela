@@ -3,7 +3,7 @@ using System;
 namespace Maela.Tests
 {
     // Every sound effect renders, starts and ends silently (no clicks), stays in its
-    // loudness band and is short.
+    // loudness band and is short (rings a little longer).
     //
     // Build and run:  scripts\test_ci.cmd
     internal static class SoundTests
@@ -29,7 +29,9 @@ namespace Maela.Tests
                 short last = (short)(pcm[pcm.Length - 2] | (pcm[pcm.Length - 1] << 8));
                 double db = 20 * Math.Log10(peak / 32768.0);
                 double ms = n * 1000.0 / SoundFx.SampleRate;
-                Check(n > 0 && Math.Abs(first) < 50 && Math.Abs(last) < 50 && db > -24 && db <= -14.5 && ms <= 800,
+                // A ring is one cycle of a repeating call tone, so it runs longer than a chime.
+                double maxMs = cue == SoundCue.Ring || cue == SoundCue.Ringback ? 1500 : 800;
+                Check(n > 0 && Math.Abs(first) < 50 && Math.Abs(last) < 50 && db > -24 && db <= -14.5 && ms <= maxMs,
                     cue + ": " + ms.ToString("F0") + " ms, peak " + db.ToString("F1") + " dBFS, clean start/end");
             }
             Console.WriteLine();
