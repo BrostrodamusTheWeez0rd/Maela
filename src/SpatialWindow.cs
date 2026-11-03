@@ -2027,7 +2027,7 @@ namespace Maela
 
         private int _frameRate;
         private double _refreshSeconds = 1 / 60.0; // How long one refresh of this screen lasts, measured.
-        private double _nextDue; // When the next frame is due on the display's refresh, by _clock.
+        private bool _skipRefresh;
 
         private void WantRefresh(bool want)
         {
@@ -2055,21 +2055,14 @@ namespace Maela
                     _refreshSeconds += (gap - _refreshSeconds) * 0.05;
                 _lastRefreshTime = args.RenderingTime;
             }
-            // 60 a second, or 120 if chosen, on whichever refreshes come due. A screen slower than
-            // that draws on every refresh.
-            // Timed by the refresh itself, not when this runs, so a late callback doesn't drop a frame.
-            if (args == null)
+            // Balanced: on a screen over 100 Hz, every other refresh, so each frame shows for
+            // exactly two and motion stays evenly paced at half the work.
+            if (_frameRate == 1 && _refreshSeconds < 0.01)
             {
-                Frame();
-                return;
+                _skipRefresh = !_skipRefresh;
+                if (_skipRefresh)
+                    return;
             }
-            double period = _frameRate == 1 ? 1 / 120.0 : 1 / 60.0;
-            double now = _lastRefreshTime.TotalSeconds;
-            if (now < _nextDue - _refreshSeconds / 2)
-                return;
-            _nextDue += period;
-            if (_nextDue < now)
-                _nextDue = now + period; // After a pause, start afresh rather than catch up in a burst.
             Frame();
         }
 

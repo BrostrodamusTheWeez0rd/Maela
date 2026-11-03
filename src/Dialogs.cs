@@ -915,7 +915,7 @@ namespace Maela
             };
             AddFieldLabel("Motion in the Dynamic layout", Margin_X, Cursor_Y);
             Cursor_Y += 22;
-            foreach (string rate in new string[] { "60 a second", "120 a second, for fast screens", "Light: 30 a second, for battery" })
+            foreach (string rate in new string[] { "Smooth: every refresh of your screen", "Balanced: half the refresh on fast screens, lighter", "Light: 30 a second, for battery" })
                 _frameRate.Items.Add(rate);
             StyleCombo(_frameRate);
             _frameRate.SelectedIndex = Math.Max(0, Math.Min(2, _preferences.FrameRate));

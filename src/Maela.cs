@@ -964,8 +964,8 @@ namespace Maela
         public bool FriendsNoticeShown;
         public bool WindowsSetupOffered; // Asked once whether to set up the firewall and Defender.
         public StreamDecodeMode StreamDecode = StreamDecodeMode.Automatic;
-        // How often the Dynamic layout draws while things move: 0 60 a second, 1 120 a second,
-        // 2 Light (30 a second). 60 to start with.
+        // How often the Dynamic layout draws while things move: 0 Smooth (every refresh),
+        // 1 Balanced (half the refresh on screens over 100 Hz), 2 Light (30 a second). Smooth to start with.
         public int FrameRate = 0;
         public bool PauseInBackground; // The Dynamic layout stops moving while another window has focus.
         public int ShareHeight = 1080;
@@ -1142,14 +1142,14 @@ namespace Maela
                         p.ReduceMotion = value.Trim() == "1";
                     else if (key == "framerate")
                     {
-                        // Older versions: 0 Smooth, 1 Balanced, 2 Light. Light carries over; the rest get 60.
-                        p.FrameRate = value.Trim() == "2" ? 2 : 0;
-                    }
-                    else if (key == "motion")
-                    {
                         int rate;
                         if (Int32.TryParse(value.Trim(), out rate) && rate >= 0 && rate <= 2)
                             p.FrameRate = rate;
+                    }
+                    else if (key == "motion")
+                    {
+                        // 0.13.3 only: 0 was 60 a second, 1 was 120 and 2 Light. Light carries over; the rest get Smooth.
+                        p.FrameRate = value.Trim() == "2" ? 2 : 0;
                     }
                     else if (key == "pausebackground")
                         p.PauseInBackground = value.Trim() == "1";
@@ -1259,7 +1259,7 @@ namespace Maela
                     "bannerb=" + p.BannerColourB.ToString("X6"),
                     "cardeffect=" + (int)p.CardEffect,
                     "picturedeco=" + (int)p.PictureDeco,
-                    "motion=" + p.FrameRate,
+                    "framerate=" + p.FrameRate,
                     "pausebackground=" + (p.PauseInBackground ? "1" : "0"),
                     "readingfont=" + p.ReadingFont,
                     "textscale=" + p.TextScale,
