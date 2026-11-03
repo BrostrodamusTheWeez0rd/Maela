@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.4 - Your screen's own refresh rate
+
+- **Motion follows your screen again.** 0.13.3 held the Dynamic layout to 60 or 120 frames a
+  second. It's back to drawing on every refresh of the screen it's on, with Balanced and Light
+  still there to save power. If you picked Light it stays; otherwise you're on Smooth.
+- Streams are unchanged: share at 30, 60 or 120 fps, with 60 to start with.
+- Pause in the background, and full speed while you share, both stay as they were in 0.13.3.
+
 ## 0.13.3 - Motion that keeps going
 
 - **Keeps moving in the background.** The Dynamic layout no longer freezes when you click into
