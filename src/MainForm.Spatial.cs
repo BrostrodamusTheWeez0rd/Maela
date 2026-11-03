@@ -185,16 +185,17 @@ namespace Maela
                 return;
             // Building a snapshot walks every chat and takes the engine's lock many times, which
             // shows up as hitches in a stream. Hidden or minimized, nobody sees it: send nothing.
-            // In the background it isn't animating, so every fifth tick (about twice a second) is plenty.
+            // Paused in the background it isn't animating, so every fifth tick (about twice a second) is plenty.
             bool onScreen = SpatialTest.WindowOnScreen;
             if (!onScreen)
             {
                 _spatialQuietTicks = 0;
                 return;
             }
-            if (!SpatialTest.WindowActive && _spatialQuietTicks++ % 5 != 0)
+            bool paused = !SpatialTest.WindowActive && _preferences.PauseInBackground;
+            if (paused && _spatialQuietTicks++ % 5 != 0)
                 return;
-            if (SpatialTest.WindowActive)
+            if (!paused)
                 _spatialQuietTicks = 0;
             SpatialTest.Send(BuildSpatialSnapshot());
         }
@@ -248,6 +249,7 @@ namespace Maela
             s.MyName = _preferences.DisplayName;
             s.ThemeId = Theme.Current.Id;
             s.FrameRate = _preferences.FrameRate;
+            s.PauseInBackground = _preferences.PauseInBackground;
             s.ReadingFont = _preferences.ReadingFont;
             s.TextScale = _preferences.TextScale;
             s.ReduceMotion = _preferences.ReduceMotion;

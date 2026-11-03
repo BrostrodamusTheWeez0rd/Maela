@@ -465,6 +465,7 @@ namespace Maela
         public string StructureKey = String.Empty, TalkKey = String.Empty, DockKey = String.Empty;
         public int LayoutKey;
         public int FrameRate; // See AppPreferences.FrameRate.
+        public bool PauseInBackground;
         public int ReadingFont, TextScale = 100;
         public bool ReduceMotion;
     }
@@ -2026,7 +2027,7 @@ namespace Maela
 
         private int _frameRate;
         private double _refreshSeconds = 1 / 60.0; // How long one refresh of this screen lasts, measured.
-        private bool _skipRefresh;
+        private double _nextDue; // When the next frame is due on the display's refresh, by _clock.
 
         private void WantRefresh(bool want)
         {
@@ -2054,18 +2055,21 @@ namespace Maela
                     _refreshSeconds += (gap - _refreshSeconds) * 0.05;
                 _lastRefreshTime = args.RenderingTime;
             }
-            // Balanced: on a screen over 100 Hz, every other refresh, so each frame shows for
-            // exactly two and motion stays evenly paced at half the work.
-            if (_frameRate == 1 && _refreshSeconds < 0.01)
+            // 60 a second, or 120 if chosen, on whichever refreshes come due. A screen slower than
+            // that draws on every refresh.
+            // Timed by the refresh itself, not when this runs, so a late callback doesn't drop a frame.
+            if (args == null)
             {
-                _skipRefresh = !_skipRefresh;
-                if (_skipRefresh)
-                    return;
-            }
-            // Sharing your screen: no more than about 60 a second, leaving the graphics card to the
-            // capture and the encoder. Whole refreshes are skipped, so motion stays evenly paced.
-            if (_state.Sharing && _refreshSeconds < 0.0145 && _clock.Elapsed.TotalSeconds - _lastFrame < 1 / 60.0 - _refreshSeconds / 2)
+                Frame();
                 return;
+            }
+            double period = _frameRate == 1 ? 1 / 120.0 : 1 / 60.0;
+            double now = _lastRefreshTime.TotalSeconds;
+            if (now < _nextDue - _refreshSeconds / 2)
+                return;
+            _nextDue += period;
+            if (_nextDue < now)
+                _nextDue = now + period; // After a pause, start afresh rather than catch up in a burst.
             Frame();
         }
 
@@ -2074,8 +2078,8 @@ namespace Maela
             double now = _clock.Elapsed.TotalSeconds, dt = Math.Min(now - _lastFrame, 0.1);
             _lastFrame = now;
 
-            // Not the active window: draw nothing at all.
-            if (!IsActive || WindowState == WindowState.Minimized)
+            // Out of sight, or behind another window with Pause in the background on: draw nothing at all.
+            if (!IsVisible || WindowState == WindowState.Minimized || (!IsActive && _state.PauseInBackground))
             {
                 WantRefresh(false);
                 return;
@@ -3298,7 +3302,7 @@ namespace Maela
                 _toTiltX = at.X / ActualWidth - 0.5;
                 _toTiltY = at.Y / ActualHeight - 0.5;
             }
-            if (IsActive)
+            if (IsActive || !_state.PauseInBackground)
                 WantRefresh(true);
         }
 

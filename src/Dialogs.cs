@@ -851,6 +851,7 @@ namespace Maela
         private readonly LayoutCard _classicCard = new LayoutCard(true);
         private readonly ToggleSwitch _dynamicEffects;
         private readonly ComboBox _frameRate = new ComboBox();
+        private readonly ToggleSwitch _pauseInBackground;
         private readonly ComboBox _readingFont = new ComboBox();
         private readonly ComboBox _textScale = new ComboBox();
         private readonly ToggleSwitch _reduceMotion;
@@ -914,13 +915,14 @@ namespace Maela
             };
             AddFieldLabel("Motion in the Dynamic layout", Margin_X, Cursor_Y);
             Cursor_Y += 22;
-            foreach (string rate in new string[] { "Smooth: every refresh of your screen", "Balanced: half the refresh on fast screens, lighter", "Light: 30 a second, for battery" })
+            foreach (string rate in new string[] { "60 a second", "120 a second, for fast screens", "Light: 30 a second, for battery" })
                 _frameRate.Items.Add(rate);
             StyleCombo(_frameRate);
             _frameRate.SelectedIndex = Math.Max(0, Math.Min(2, _preferences.FrameRate));
             _frameRate.SetBounds(Margin_X, Cursor_Y, ClientSize.Width - Margin_X * 2, 28);
             Controls.Add(_frameRate);
             Cursor_Y += 40;
+            _pauseInBackground = AddToggle("Pause in the background", "Stops the Dynamic layout's motion while another window is in front, to save power. Off: it keeps moving.", _preferences.PauseInBackground);
 
             AddSection("Accessibility");
             AddFieldLabel("Font", Margin_X, Cursor_Y);
@@ -1157,6 +1159,7 @@ namespace Maela
             _preferences.AllowDirectStreams = _directStreams.Checked;
             _preferences.StreamDecode = (StreamDecodeMode)_streamDecode.SelectedIndex;
             _preferences.FrameRate = _frameRate.SelectedIndex;
+            _preferences.PauseInBackground = _pauseInBackground.Checked;
             _preferences.ReadingFont = _readingFont.SelectedIndex;
             _preferences.TextScale = _textScale.SelectedIndex == 2 ? 130 : _textScale.SelectedIndex == 1 ? 115 : 100;
             _preferences.ReduceMotion = _reduceMotion.Checked;
