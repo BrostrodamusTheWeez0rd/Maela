@@ -6,7 +6,7 @@
 
 **mæla** is a lightweight self-hosted Windows voice-room app. One person hosts, friends join with a short room code, and the host relays voice directly without accounts or a permanent central service.
 
-Current release: **0.13.2**. Open source under the MIT License.
+Current release: **0.13.3**. Open source under the MIT License.
 
 ## Highlights
 

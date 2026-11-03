@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.3 - Motion that keeps going
+
+- **Keeps moving in the background.** The Dynamic layout no longer freezes when you click into
+  another window. If you'd rather it did, to save power, turn on **Pause in the background** in
+  Settings. Minimized, it still stops.
+- **60 or 120 a second.** Motion in the Dynamic layout now runs at 60 frames a second, or 120 if
+  you choose it and your screen is fast enough, on any monitor. Light (30 a second) is still there
+  for battery. If you had Light it stays; Smooth and Balanced become 60.
+- **Full speed while you share.** The Dynamic layout no longer slows to 60 while you share your
+  screen; it keeps the rate you chose.
+
 ## 0.13.2 - Clearer voice and steadier streams
 
 - **Clearer voice.** The Strong noise filter is gone: it made voices sound muffled without
