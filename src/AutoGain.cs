@@ -70,17 +70,7 @@ namespace Maela
             bool voiced = _voicing.Analyze(pcm16);
             bool speech = voiced && rmsDb > Math.Max(_floorDb + SpeechAboveFloorDb, AbsoluteSpeechDb);
             if (speech)
-            {
-                // Follow peaks of speech quickly, let the level relax slowly.
-                double rate = rmsDb > _levelDb ? 0.25 : 0.04;
-                _levelDb += rate * (rmsDb - _levelDb);
-
-                double desired = Math.Max(MinGainDb, Math.Min(MaxGainDb, TargetDb - _levelDb));
-                if (desired > _gainDb)
-                    _gainDb = Math.Min(desired, _gainDb + RiseDbPerFrame);
-                else
-                    _gainDb = Math.Max(desired, _gainDb - FallDbPerFrame);
-            }
+                Adapt(rmsDb, 1.0);
 
             double gain = Math.Pow(10.0, _gainDb / 20.0);
             double step = (gain - _previousGain) / count; // Ramp across the frame: no zipper noise.
@@ -102,6 +92,57 @@ namespace Maela
                 pcm16[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);
             }
             _previousGain = gain;
+        }
+
+        /// <summary>
+        /// For the encoder, after its mic gate: adapts only when the gate says this is speech, so
+        /// the gate, not a second guess, decides what the gain learns from. Any frame length.
+        /// </summary>
+        public void Process(short[] samples, int count, bool speech)
+        {
+            if (count == 0)
+                return;
+            double energy = 0.0;
+            int i;
+            for (i = 0; i < count; i++)
+                energy += (double)samples[i] * samples[i];
+            if (speech)
+                Adapt(10.0 * Math.Log10(energy / count / (32768.0 * 32768.0) + 1e-12), count / 480.0);
+
+            double gain = Math.Pow(10.0, _gainDb / 20.0);
+            double step = (gain - _previousGain) / count;
+            double g = _previousGain;
+            for (i = 0; i < count; i++)
+            {
+                g += step;
+                samples[i] = (short)Math.Round(Limit(samples[i] / 32768.0 * g) * 32767.0);
+            }
+            _previousGain = gain;
+        }
+
+        /// <summary>Follows the speech level and steers the gain. frames: how many 10 ms this covers.</summary>
+        private void Adapt(double rmsDb, double frames)
+        {
+            // Follow peaks of speech quickly, let the level relax slowly.
+            double rate = rmsDb > _levelDb ? 0.25 : 0.04;
+            _levelDb += (1 - Math.Pow(1 - rate, frames)) * (rmsDb - _levelDb);
+
+            double desired = Math.Max(MinGainDb, Math.Min(MaxGainDb, TargetDb - _levelDb));
+            if (desired > _gainDb)
+                _gainDb = Math.Min(desired, _gainDb + RiseDbPerFrame * frames);
+            else
+                _gainDb = Math.Max(desired, _gainDb - FallDbPerFrame * frames);
+        }
+
+        /// <summary>Smoothly approaches (never reaches) full scale above about -2 dBFS.</summary>
+        private static double Limit(double v)
+        {
+            double a = Math.Abs(v);
+            if (a <= LimitStart)
+                return v;
+            double over = (a - LimitStart) / (1.0 - LimitStart);
+            a = LimitStart + (1.0 - LimitStart) * (over / (1.0 + over));
+            return v < 0 ? -a : a;
         }
     }
 }

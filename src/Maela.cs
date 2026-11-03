@@ -951,7 +951,6 @@ namespace Maela
         /// <summary>Card and picture decos show: Dynamic effects on, and motion not reduced.</summary>
         public bool ShowDecos { get { return ShowDynamicEffects && !ReduceMotion; } }
         public bool NoiseSuppression = true;
-        public bool StrongNoiseFilter = true; // RNNoise and a voice-only mic gate; off: the original filter.
         public bool SetupDone;
         public bool SoundEffects = true;
         public bool AutoGain = true;
@@ -1002,7 +1001,6 @@ namespace Maela
             p.TextScale = TextScale;
             p.ReduceMotion = ReduceMotion;
             p.NoiseSuppression = NoiseSuppression;
-            p.StrongNoiseFilter = StrongNoiseFilter;
             p.SetupDone = SetupDone;
             p.SoundEffects = SoundEffects;
             p.AutoGain = AutoGain;
@@ -1161,10 +1159,6 @@ namespace Maela
                     {
                         p.NoiseSuppression = value != "0";
                     }
-                    else if (key == "noisestrong")
-                    {
-                        p.StrongNoiseFilter = value.Trim() != "0";
-                    }
                     else if (key == "setup")
                     {
                         p.SetupDone = value == "1";
@@ -1262,7 +1256,6 @@ namespace Maela
                     "reducemotion=" + (p.ReduceMotion ? "1" : "0"),
                     "dynamiceffects=" + (p.DynamicEffectsSet ? (p.DynamicEffects ? "1" : "0") : String.Empty),
                     "noise=" + (p.NoiseSuppression ? "1" : "0"),
-                    "noisestrong=" + (p.StrongNoiseFilter ? "1" : "0"),
                     "setup=" + (p.SetupDone ? "1" : "0"),
                     "sfx=" + (p.SoundEffects ? "1" : "0"),
                     "agc=" + (p.AutoGain ? "1" : "0"),
@@ -3952,9 +3945,9 @@ namespace Maela
                 }
             }
             ApplyNoiseSuppression(pcm);
-            ApplyAutoGain(pcm);
-            _voiceEncoder.VoiceProbability = _voiceProbability;
-            ScalePcm16InPlace(pcm, _micVolumePercent / 100.0f);
+            // Gain and your mic volume come after the encoder's gate has had its say.
+            _voiceEncoder.Gain = _autoGainEnabled ? _autoGain : null;
+            _voiceEncoder.Volume = _micVolumePercent / 100.0f;
 
             List<EncodedVoice> packets = _encodedScratch;
             packets.Clear();
@@ -4147,26 +4140,6 @@ namespace Maela
             if (value > max)
                 return max;
             return value;
-        }
-
-        private static void ScalePcm16InPlace(byte[] pcm, float gain)
-        {
-            if (pcm == null || pcm.Length < 2 || Math.Abs(gain - 1.0f) < 0.001f)
-                return;
-
-            int i;
-            for (i = 0; i + 1 < pcm.Length; i += 2)
-            {
-                short sample = (short)(pcm[i] | (pcm[i + 1] << 8));
-                int scaled = (int)(sample * gain);
-                if (scaled > Int16.MaxValue)
-                    scaled = Int16.MaxValue;
-                else if (scaled < Int16.MinValue)
-                    scaled = Int16.MinValue;
-
-                pcm[i] = (byte)(scaled & 0xFF);
-                pcm[i + 1] = (byte)((scaled >> 8) & 0xFF);
-            }
         }
 
         private void DisposePlaybackStream(uint senderId)

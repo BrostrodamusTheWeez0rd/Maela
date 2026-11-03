@@ -19,9 +19,14 @@ namespace Maela
     ///
     /// Silence detection: a frame counts as speech when it is clearly above the room's
     /// background level AND has the pitch of a voice (so typing, clicks and taps on their own
-    /// never open the mic). Sending continues for a short hangover after speech so word endings
-    /// aren't clipped, and the 60 ms before speech starts is sent too so first syllables aren't
-    /// lost. Nothing is sent while quiet, which is most of the time in a voice chat.
+    /// never open the mic). It takes two such frames in a row (40 ms) to open, so one pitched
+    /// knock or squeak doesn't. Sending continues for a short hangover after speech so word
+    /// endings aren't clipped, and the 80 ms before the gate opens is sent too so first
+    /// syllables aren't lost. Nothing is sent while quiet, which is most of the time in a voice chat.
+    ///
+    /// After the gate decides, and only then: automatic gain (learning only from what the gate
+    /// called speech), an expander that turns pauses down while the gate is held open, so the
+    /// room's noise isn't heard between words, and finally your mic volume.
     ///
     /// Every frame is encoded (even silent ones) so the encoder's state stays continuous; the
     /// sequence number advances every 20 ms so receivers can tell loss from silence.
@@ -33,11 +38,20 @@ namespace Maela
         public const int MaxPacketBytes = 400;
         public const int Bitrate = 32000;
 
-        private const int HangoverFrames = 20;        // 400 ms
-        private const int PreRollFrames = 3;          // 60 ms sent ahead of the first voiced frame
+        private const int HangoverFrames = 15;        // 300 ms
+        private const int PreRollFrames = 4;          // 80 ms sent ahead of the frame that opens the gate
+        private const int ConfirmFrames = 2;          // Speech this many frames running opens the gate.
         private const float SpeechAboveFloorDb = 10.0f;
-        private const float AbsoluteSpeechDb = -55.0f;
+        private const float AbsoluteSpeechDb = -62.0f; // Before gain now, so a quiet mic still opens it.
         private const float FloorRiseDbPerFrame = 0.08f;
+
+        // Expander: anything not clearly above the background is a pause, and after a short hold
+        // fades down to the floor. Any sound above it comes back at once.
+        private const float ExpanderAboveFloorDb = 6.0f;
+        private const int ExpanderHoldFrames = 2;      // 40 ms
+        private const float ExpanderFallDbPerFrame = 3.0f;
+        private const float ExpanderFloorDb = -20.0f;
+        private const int AttackSamples = 120;         // 2.5 ms: a word's start isn't faded in.
 
 #if !MAELA_STUB_CODEC
         private readonly OpusEncoder _opus;
@@ -47,8 +61,13 @@ namespace Maela
         private int _fill;
         private uint _sequence;
         private float _noiseFloorDb = -60.0f;
+        private float _levelDb = -90.0f;
         private int _hangover;
+        private int _speechRun;
         private bool _open;
+        private int _pauseRun;
+        private float _expanderDb;
+        private float _lastGain = 1f;
         private readonly Queue<EncodedVoice> _recent = new Queue<EncodedVoice>();
         private readonly VoicingDetector _voicing = new VoicingDetector();
 
@@ -66,11 +85,11 @@ namespace Maela
 #endif
         }
 
-        /// <summary>
-        /// How likely the frame is to be speech, from the Strong noise filter, or -1 when it isn't
-        /// on. With it, only speech opens the mic; without, a loud pitched sound does.
-        /// </summary>
-        public float VoiceProbability = -1;
+        /// <summary>Automatic gain, applied after the gate; null when it's off.</summary>
+        public AutoGain Gain;
+
+        /// <summary>Your mic volume (1 = as is), applied last.</summary>
+        public float Volume = 1f;
 
         /// <summary>True while the gate is open (we are talking).</summary>
         public bool IsSpeaking { get { return _open; } }
@@ -101,20 +120,11 @@ namespace Maela
             // loud but have no pitch, so on their own they're never sent.
             bool loud = UpdateGate();
             bool voiced = _voicing.Analyze(_frame, FrameSamples);
-            bool speech = VoiceProbability >= 0 ? loud && VoiceProbability >= 0.5f : loud && voiced;
-
-#if !MAELA_STUB_CODEC
-            int length = _opus.Encode(_frame, 0, FrameSamples, _packet, 0, _packet.Length);
-#else
-            int length = StubCodec.Encode(_frame, _packet);
-#endif
-            if (length <= 0)
-                return;
-            byte[] data = new byte[length];
-            Buffer.BlockCopy(_packet, 0, data, 0, length);
+            bool speech = loud && voiced;
+            _speechRun = speech ? _speechRun + 1 : 0;
 
             bool wasOpen = _open;
-            if (speech || AlwaysSend)
+            if (AlwaysSend || (speech && (_open || _speechRun >= ConfirmFrames)))
             {
                 _hangover = HangoverFrames;
                 _open = true;
@@ -127,6 +137,17 @@ namespace Maela
             {
                 _open = false;
             }
+            Shape(speech && _open);
+
+#if !MAELA_STUB_CODEC
+            int length = _opus.Encode(_frame, 0, FrameSamples, _packet, 0, _packet.Length);
+#else
+            int length = StubCodec.Encode(_frame, _packet);
+#endif
+            if (length <= 0)
+                return;
+            byte[] data = new byte[length];
+            Buffer.BlockCopy(_packet, 0, data, 0, length);
 
             if (_open)
             {
@@ -157,6 +178,7 @@ namespace Maela
             energy /= FrameSamples;
             float levelDb = (float)(10.0 * Math.Log10(energy / (32768.0 * 32768.0) + 1e-10));
 
+            _levelDb = levelDb;
             if (levelDb < _noiseFloorDb)
                 _noiseFloorDb = 0.7f * _noiseFloorDb + 0.3f * levelDb;   // Fall quickly to quiet levels.
             else
@@ -165,6 +187,34 @@ namespace Maela
             if (_noiseFloorDb > -25.0f) _noiseFloorDb = -25.0f;
 
             return levelDb > Math.Max(_noiseFloorDb + SpeechAboveFloorDb, AbsoluteSpeechDb);
+        }
+
+        /// <summary>Gain, then the expander, then your volume, on the frame about to be encoded.</summary>
+        private void Shape(bool speech)
+        {
+            AutoGain gain = Gain;
+            if (gain != null)
+                gain.Process(_frame, FrameSamples, speech);
+
+            if (_levelDb > _noiseFloorDb + ExpanderAboveFloorDb)
+            {
+                _pauseRun = 0;
+                _expanderDb = 0;
+            }
+            else if (++_pauseRun > ExpanderHoldFrames)
+                _expanderDb = Math.Max(ExpanderFloorDb, _expanderDb - ExpanderFallDbPerFrame);
+
+            float target = (float)Math.Pow(10.0, _expanderDb / 20.0) * Volume;
+            float from = _lastGain;
+            // Rising: quickly, so the start of a word comes through whole. Falling: across the frame.
+            int ramp = target > from ? AttackSamples : FrameSamples;
+            for (int i = 0; i < FrameSamples; i++)
+            {
+                float g = i < ramp ? from + (target - from) * (i + 1) / ramp : target;
+                float v = _frame[i] * g;
+                _frame[i] = v > 32767f ? (short)32767 : v < -32768f ? (short)-32768 : (short)v;
+            }
+            _lastGain = target;
         }
 
         private static EncodedVoice Packet(uint sequence, byte[] data)

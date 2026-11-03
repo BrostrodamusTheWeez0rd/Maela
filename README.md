@@ -29,7 +29,7 @@ Current release: **0.13.1**. Open source under the MIT License.
 - Discord-style sidebar showing who is in which channel, who's speaking, muted or deafened
 - Colour emoji, reactions, an emoji picker and message search
 - Mute, deafen, live ping, automatic mic level and gentle sound effects
-- A Strong noise filter (RNNoise, a small neural network built in and run on your PC) that removes typing, clicks, fans and hum and only opens your mic for speech
+- A noise filter and a voice-only mic gate, so typing and clicks don't open your mic and background noise is turned down between words
 - Fonts including OpenDyslexic and Atkinson Hyperlegible, text size and Reduce motion settings
 - Leave voice but stay in the room to keep chatting; Disconnect to leave it
 - Runs in the system tray when closed (mute, deafen, leave or quit from the tray icon); hosts can keep the room online there
@@ -77,8 +77,6 @@ mæla only uses open-source components:
 
 - **Opus codec (Concentus)** is fetched at build time from its official source and every file
   is checked against pinned SHA-256 hashes.
-- **RNNoise** (Xiph, BSD licence), the Strong noise filter, is ported to C# in `src/Rnnoise.cs`;
-  its 87 KB trained model is stored in `assets/rnnoise` and built into `Maela.exe`.
 - **Fonts** (Outfit, OpenDyslexic, Atkinson Hyperlegible, Lexend and Space Grotesk, all under the
   SIL Open Font License) are stored in `assets/fonts` and built into `Maela.exe`, so they're never
   downloaded. Each is checked against its SHA-256 hash before use.
@@ -140,7 +138,6 @@ No Visual Studio, NuGet, or package restore is required.
 ```text
 assets/                  Logo, mark and Windows icon
 assets/fonts/            Built-in fonts (SIL Open Font License)
-assets/rnnoise/          RNNoise model and its licence
 src/Maela.cs             Application, UI and networking
 src/SpatialWindow.cs     The Dynamic layout (WPF, on its own thread)
 src/MainForm.Spatial.cs  Connects the Dynamic layout to the app
@@ -149,7 +146,6 @@ src/ChatPicture.cs       Chat pictures: rebuilding, checking and unpacking
 src/VoipEngine.ChatPictures.cs, FriendService.Pictures.cs  Sending pictures in rooms and friend chats
 src/VoipEngine.ProfileExtras.cs  Banners and decos on the wire
 src/VoipEngine.ChannelLayout.cs  Where hosts put channels
-src/Rnnoise.cs           Strong noise filter (RNNoise port)
 src/ReadingFonts.cs      Built-in fonts
 src/EchoCanceller.cs     Acoustic echo canceller
 src/Updater.cs           GitHub Releases auto-updater
@@ -195,4 +191,4 @@ See `docs/NETWORKING.md` for more detail.
 
 mæla is open source under the [MIT License](LICENSE). Copyright (c) 2026 BrostrodamusTheWeez0rd.
 
-mæla includes the Opus codec via [Concentus](https://github.com/lostromb/concentus) under the BSD 3-clause license, a port of [RNNoise](https://github.com/xiph/rnnoise) under the BSD license, fonts under the SIL Open Font License and Twemoji under CC-BY 4.0. See `THIRD_PARTY_NOTICES.txt` (also viewable from Settings).
+mæla includes the Opus codec via [Concentus](https://github.com/lostromb/concentus) under the BSD 3-clause license, fonts under the SIL Open Font License and Twemoji under CC-BY 4.0. See `THIRD_PARTY_NOTICES.txt` (also viewable from Settings).

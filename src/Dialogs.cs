@@ -565,7 +565,6 @@ namespace Maela
 
             Page("Chat and voice",
                 "Clearer calls and richer chat.",
-                "A new Strong noise filter takes out typing, clicks and other noises, and only opens your mic when you talk. It runs on your PC alone, and you can switch back to the lighter one in Settings.",
                 "Send pictures in rooms and friend chats with the picture button, or paste one (a screenshot too) with Ctrl+V. Click one to see it full size or save it.",
                 "Pictures are rebuilt from their pixels on your PC, so nothing hidden in the file (location, camera details, its name) is ever sent.",
                 "YouTube links show as a card. Nothing is loaded from YouTube unless you ask for a preview.",
@@ -848,7 +847,6 @@ namespace Maela
         private readonly TrackBar _master = new TrackBar();
         private readonly ToggleSwitch _echo;
         private readonly ToggleSwitch _noise;
-        private readonly ToggleSwitch _strongNoise;
         private readonly LayoutCard _spatialCard = new LayoutCard(false);
         private readonly LayoutCard _classicCard = new LayoutCard(true);
         private readonly ToggleSwitch _dynamicEffects;
@@ -962,7 +960,6 @@ namespace Maela
             Cursor_Y += 44;
             _echo = AddToggle("Echo cancellation", "Stops friends hearing themselves through your speakers.", _preferences.EchoCancellation);
             _noise = AddToggle("Noise filter", "Removes background noise: fans, hum, typing, clicks and more.", _preferences.NoiseSuppression);
-            _strongNoise = AddToggle("Strong noise filter", "Uses RNNoise, a small built-in neural network, and only opens your mic for speech. Off: the lighter original filter.", _preferences.StrongNoiseFilter);
             _agc = AddToggle("Automatic mic level", "Evens out your volume so friends hear you clearly.", _preferences.AutoGain);
             _sounds = AddToggle("Sound effects", "Chimes for joining, leaving, mute, deafen and new messages.", _preferences.SoundEffects);
 
@@ -1152,7 +1149,6 @@ namespace Maela
             _preferences.MasterVolumePercent = _master.Value;
             _preferences.EchoCancellation = _echo.Checked;
             _preferences.NoiseSuppression = _noise.Checked;
-            _preferences.StrongNoiseFilter = _strongNoise.Checked;
             _preferences.SoundEffects = _sounds.Checked;
             _preferences.AutoGain = _agc.Checked;
             _preferences.CloseToTray = _closeToTray.Checked;

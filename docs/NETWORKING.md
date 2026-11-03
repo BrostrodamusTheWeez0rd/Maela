@@ -258,13 +258,12 @@ Every datagram starts with magic `MFR1` (4) and a type (1).
 ## Voice
 
 - Opus at 48 kHz mono, 20 ms frames, 32 kbps VBR, with in-band forward error correction.
-- Voice detection: a frame is sent only if it is loud enough (adaptive noise floor) *and*
-  pitched like a voice (autocorrelation, 70–400 Hz), so typing, clicks and bumps alone send
-  nothing. A 400 ms tail and 60 ms of pre-roll keep word starts and ends intact.
-- With the Strong noise filter (on by default), RNNoise cleans each 10 ms of audio (480 samples at
-  48 kHz) and reports how likely it is to be speech. A frame is then sent only if it is loud enough
-  *and* at least 50% likely to be speech, so noise alone never opens the mic. If the filter averages
-  more than 6 ms per frame, mæla switches back to the lighter filter on its own.
+- Voice detection: a frame counts as speech only if it is loud enough (adaptive noise floor)
+  *and* pitched like a voice (autocorrelation, 70–400 Hz), and the mic opens after two such frames
+  in a row, so typing, clicks, bumps and single knocks send nothing. A 300 ms tail and 80 ms of
+  pre-roll keep word starts and ends intact.
+- After the gate: automatic gain (learning only from frames the gate called speech), then a
+  downward expander that fades pauses by up to 20 dB while the mic is held open, then mic volume.
 - The Dynamic layout's waveform lines are drawn from the voice each PC already receives; nothing
   extra is sent for them.
 - Receivers rebuild one or two lost packets from FEC or concealment, and keep a 40 ms jitter

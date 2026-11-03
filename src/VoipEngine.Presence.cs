@@ -22,13 +22,6 @@ namespace Maela
 
         private readonly Dictionary<uint, byte> _memberFlags = new Dictionary<uint, byte>();
         private readonly NoiseSuppressor _noiseSuppressor = new NoiseSuppressor();
-        private readonly Rnnoise _rnnoise = new Rnnoise();
-        private readonly float[] _rnnIn = new float[Rnnoise.FrameSize], _rnnOut = new float[Rnnoise.FrameSize];
-        private volatile bool _strongNoise = true;
-        private bool _strongTooSlow;       // Couldn't keep up on this PC: Standard instead, until restarted.
-        private double _strongCostMs;      // How long a frame takes, smoothed.
-        private float _lastVoiceProbability;
-        private float _voiceProbability = -1; // -1: unknown, and the gate goes by pitch as before.
         private readonly AutoGain _autoGain = new AutoGain();
         private volatile bool _autoGainEnabled = true;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -63,37 +56,11 @@ namespace Maela
             }
         }
 
-        /// <summary>
-        /// Strong noise filter: RNNoise, which also tells the mic gate how likely you are to be
-        /// talking, so typing and noises alone don't open your mic. Off: the original filter.
-        /// </summary>
-        public bool StrongNoiseFilter
-        {
-            get { return _strongNoise; }
-            set
-            {
-                if (value != _strongNoise)
-                    _noiseResetPending = true;
-                _strongNoise = value;
-            }
-        }
-
-        /// <summary>True when Strong is chosen but this PC couldn't keep up, so Standard is in use.</summary>
-        public bool StrongNoiseFallback { get { return _strongTooSlow; } }
-
         /// <summary>Evens out your mic level so quiet mics are heard clearly and loud ones don't blast.</summary>
         public bool AutoGain
         {
             get { return _autoGainEnabled; }
             set { _autoGainEnabled = value; }
-        }
-
-        private void ApplyAutoGain(byte[] pcm)
-        {
-            if (!_autoGainEnabled)
-                return;
-            try { _autoGain.Process(pcm); }
-            catch { }
         }
 
         /// <summary>Round-trip time to the host in milliseconds, or -1 if unknown (or you are the host).</summary>
@@ -143,10 +110,7 @@ namespace Maela
         private void ApplyNoiseSuppression(byte[] pcm)
         {
             if (!_noiseSuppression)
-            {
-                _voiceProbability = -1;
                 return;
-            }
             try
             {
                 if (_noiseResetPending)
@@ -154,47 +118,11 @@ namespace Maela
                     _noiseResetPending = false;
                     _noiseSuppressor.Reset();
                 }
-                if (_strongNoise && !_strongTooSlow && Rnnoise.Available && pcm.Length == Rnnoise.FrameSize * 2)
-                    StrongNoiseFrame(pcm);
-                else
-                {
-                    _voiceProbability = -1;
-                    _noiseSuppressor.Process(pcm);
-                }
+                _noiseSuppressor.Process(pcm);
             }
             catch
             {
                 // Never let audio processing take the microphone down.
-                _voiceProbability = -1;
-            }
-        }
-
-        /// <summary>
-        /// One 10 ms frame through RNNoise. The encoder's 20 ms frames each take two of these, so it
-        /// gets the more speech-like of the last two. If this PC takes too long, Standard takes over.
-        /// </summary>
-        private void StrongNoiseFrame(byte[] pcm)
-        {
-            long started = Stopwatch.GetTimestamp();
-            for (int i = 0; i < Rnnoise.FrameSize; i++)
-                _rnnIn[i] = (short)(pcm[i * 2] | (pcm[i * 2 + 1] << 8));
-            float probability = _rnnoise.ProcessFrame(_rnnIn, _rnnOut);
-            for (int i = 0; i < Rnnoise.FrameSize; i++)
-            {
-                int v = (int)Math.Round(_rnnOut[i]);
-                if (v > 32767) v = 32767;
-                else if (v < -32768) v = -32768;
-                pcm[i * 2] = (byte)v;
-                pcm[i * 2 + 1] = (byte)(v >> 8);
-            }
-            _voiceProbability = Math.Max(probability, _lastVoiceProbability);
-            _lastVoiceProbability = probability;
-            double ms = (Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency;
-            _strongCostMs = _strongCostMs == 0 ? ms : _strongCostMs * 0.98 + ms * 0.02;
-            if (_strongCostMs > 6.0)
-            {
-                _strongTooSlow = true; // More than half of each 10 ms: not worth the risk of gaps.
-                _noiseSuppressor.Reset();
             }
         }
 

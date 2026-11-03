@@ -141,9 +141,8 @@ What it doesn't protect:
   source is refused. Files are checked again on every launch, and a file that changes on disk
   is ignored.
 - These downloads are images only. The only code mæla ever downloads is its own update (below).
-- The fonts and the RNNoise noise filter's model are built into `Maela.exe`, never downloaded.
-  Fonts are unpacked to `%LocalAppData%\Maela\Fonts` and checked against their SHA-256 hashes
-  before use. The noise filter runs entirely on your PC and learns, stores and sends nothing.
+- The fonts are built into `Maela.exe`, never downloaded. They are unpacked to
+  `%LocalAppData%\Maela\Fonts` and checked against their SHA-256 hashes before use.
 - YouTube links in chat load nothing from YouTube unless you click Show preview; Play opens the
   link in your browser.
 - First-run setup lists everything mæla uses or downloads, with licenses, before anything is
