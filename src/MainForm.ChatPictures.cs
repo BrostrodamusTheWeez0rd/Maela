@@ -14,6 +14,7 @@ namespace Maela
     internal sealed partial class MainForm
     {
         private readonly Dictionary<string, System.Windows.Media.ImageSource> _shotThumbs = new Dictionary<string, System.Windows.Media.ImageSource>();
+        private readonly Queue<string> _shotThumbOrder = new Queue<string>(); // Oldest first, so the oldest go past the budget.
 
         /// <summary>A message's words as Lightweight's chat shows them: a picture becomes a line to click.</summary>
         internal static string ChatRowText(string text)
@@ -72,9 +73,16 @@ namespace Maela
                 line.ShotWidth = width;
                 line.ShotHeight = height;
                 line.FriendId = friendId;
-                byte[] blob = ChatPictureBlob(id, bytes, friendId);
-                if (blob != null)
-                    line.Shot = ShotThumb(id, blob);
+                // A thumbnail already made needs no picture: a friend's may be read back from disk.
+                System.Windows.Media.ImageSource thumb;
+                if (_shotThumbs.TryGetValue(id, out thumb))
+                    line.Shot = thumb;
+                else
+                {
+                    byte[] blob = ChatPictureBlob(id, bytes, friendId);
+                    if (blob != null)
+                        line.Shot = ShotThumb(id, blob);
+                }
                 line.ShotComing = line.Shot == null && ChatPictureComing(id, friendId);
                 return;
             }
@@ -100,9 +108,10 @@ namespace Maela
                     Buffer.BlockCopy(rgb, ((y * step) * width + x * step) * 3, small, (y * w + x) * 3, 3);
             System.Windows.Media.Imaging.BitmapSource source = System.Windows.Media.Imaging.BitmapSource.Create(w, h, 96, 96, System.Windows.Media.PixelFormats.Rgb24, null, small, w * 3);
             source.Freeze();
-            if (_shotThumbs.Count > 64)
-                _shotThumbs.Clear();
+            while (_shotThumbOrder.Count >= 64)
+                _shotThumbs.Remove(_shotThumbOrder.Dequeue());
             _shotThumbs[id] = source;
+            _shotThumbOrder.Enqueue(id);
             return source;
         }
 

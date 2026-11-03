@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows.Forms;
 
@@ -19,6 +20,7 @@ namespace Maela
         private string _spatialFriendId;
         private bool _spatialBroken; // The Spatial window failed: Classic takes over until the next start.
         private readonly Dictionary<Image, System.Windows.Media.ImageSource> _spatialPictures = new Dictionary<Image, System.Windows.Media.ImageSource>();
+        private readonly Queue<Image> _spatialPictureOrder = new Queue<Image>(); // Oldest first, so the oldest go past the budget.
 
         /// <summary>Spatial is the app's only window; this form stays hidden and keeps running it.</summary>
         private bool SpatialMode { get { return _preferences != null && !_preferences.ClassicLayout && !_spatialBroken; } }
@@ -181,8 +183,27 @@ namespace Maela
         {
             if (!SpatialTest.IsOpen)
                 return;
+            // Building a snapshot walks every chat and takes the engine's lock many times, which
+            // shows up as hitches in a stream. Hidden or minimized, nobody sees it: send nothing.
+            // In the background it isn't animating, so every fifth tick (about twice a second) is plenty.
+            bool onScreen = SpatialTest.WindowOnScreen;
+            if (!onScreen)
+            {
+                _spatialQuietTicks = 0;
+                return;
+            }
+            if (!SpatialTest.WindowActive && _spatialQuietTicks++ % 5 != 0)
+                return;
+            if (SpatialTest.WindowActive)
+                _spatialQuietTicks = 0;
             SpatialTest.Send(BuildSpatialSnapshot());
         }
+
+        private int _spatialQuietTicks;
+
+        // The last chat lists built, kept while their keys hold so a tick doesn't rebuild them.
+        private string _spatialChatBuiltFor, _spatialFriendChatBuiltFor;
+        private List<SpatialLine> _spatialChatLines, _spatialFriendChatLines;
 
         private System.Windows.Media.ImageSource SpatialPicture(Image image)
         {
@@ -191,8 +212,6 @@ namespace Maela
             System.Windows.Media.ImageSource source;
             if (_spatialPictures.TryGetValue(image, out source))
                 return source;
-            if (_spatialPictures.Count > 128)
-                _spatialPictures.Clear();
             try
             {
                 using (MemoryStream stream = new MemoryStream())
@@ -213,7 +232,10 @@ namespace Maela
             {
                 source = null;
             }
+            while (_spatialPictureOrder.Count >= 128)
+                _spatialPictures.Remove(_spatialPictureOrder.Dequeue());
             _spatialPictures[image] = source;
+            _spatialPictureOrder.Enqueue(image);
             return source;
         }
 
@@ -367,28 +389,15 @@ namespace Maela
                 if (s.ChatChannel > 0)
                 {
                     s.ChatKey = engine.GetHashCode() + "|" + s.ChatChannel + "|" + engine.ChatVersion;
-                    ChatMessage[] messages = engine.GetChat(s.ChatChannel);
-                    Dictionary<uint, List<ReactionSummary>> reactions = VoipEngine.SummarizeReactions(messages);
-                    foreach (ChatMessage message in messages)
+                    // Avatars and your own picture can change without the chat itself changing.
+                    string builtFor = s.ChatKey + "|" + engine.ProfilesVersion + "|" + RuntimeHelpers.GetHashCode(s.MyPicture);
+                    if (builtFor == _spatialChatBuiltFor)
+                        s.Chat = _spatialChatLines;
+                    else
                     {
-                        if (message.IsReaction)
-                            continue;
-                        SpatialLine line = new SpatialLine();
-                        line.Who = message.SenderName;
-                        line.Picture = SpatialPicture(message.IsLocal ? MyPicture() : AvatarImage(message.SenderId));
-                        line.Text = message.Text;
-                        FillAttachments(line, null);
-                        line.TimeUtc = message.TimeUtc;
-                        line.Note = message.Failed ? "Not sent" : message.Pending ? "Sending…" : null;
-                        if (!message.Pending && !message.Failed && message.Sequence != 0)
-                        {
-                            line.ReactKey = message.Sequence;
-                            List<ReactionSummary> summary;
-                            if (reactions.TryGetValue(message.Sequence, out summary))
-                                foreach (ReactionSummary r in summary)
-                                    line.Reactions.Add(SpatialReactionFor(r.Emoji, r.Count, r.Mine));
-                        }
-                        s.Chat.Add(line);
+                        _spatialChatBuiltFor = builtFor;
+                        _spatialChatLines = s.Chat;
+                        BuildSpatialChat(engine, s);
                     }
                 }
             }
@@ -399,25 +408,14 @@ namespace Maela
                 s.FriendChatKey = _spatialFriendId + "|" + _friends.Version;
                 FriendInfo person = _friends.GetPeople().Find(delegate(FriendInfo p) { return p.Id == _spatialFriendId; });
                 string theirName = person == null ? String.Empty : person.Name;
-                List<FriendChatEntry> entries = _friends.GetChat(_spatialFriendId);
-                Dictionary<ulong, List<FriendReaction>> reactions = FriendChat.Summarize(entries);
-                foreach (FriendChatEntry entry in entries)
+                string builtFor = s.FriendChatKey + "|" + theirName + "|" + _preferences.DisplayName + "|" + RuntimeHelpers.GetHashCode(s.MyPicture);
+                if (builtFor == _spatialFriendChatBuiltFor)
+                    s.FriendChat = _spatialFriendChatLines;
+                else
                 {
-                    if (entry.ReactionTo != 0)
-                        continue;
-                    SpatialLine line = new SpatialLine();
-                    line.Who = entry.Mine ? _preferences.DisplayName : theirName;
-                    line.Picture = entry.Mine ? s.MyPicture : null;
-                    line.Text = entry.Text;
-                    FillAttachments(line, _spatialFriendId);
-                    line.TimeUtc = entry.TimeUtc;
-                    line.Note = entry.Mine && !entry.Delivered ? "Not delivered yet" : null;
-                    line.ReactKey = entry.MessageId;
-                    List<FriendReaction> summary;
-                    if (entry.MessageId != 0 && reactions.TryGetValue(entry.MessageId, out summary))
-                        foreach (FriendReaction r in summary)
-                            line.Reactions.Add(SpatialReactionFor(r.Emoji, r.Count, r.Mine));
-                    s.FriendChat.Add(line);
+                    _spatialFriendChatBuiltFor = builtFor;
+                    _spatialFriendChatLines = s.FriendChat;
+                    BuildSpatialFriendChat(s, theirName);
                 }
                 if (person != null && person.Unread != 0)
                     _friends.MarkRead(_spatialFriendId);
@@ -428,6 +426,57 @@ namespace Maela
             s.TalkKey = talk.ToString();
             s.DockKey = s.MyName + s.MyStatus + s.Muted + s.Deafened + s.Noise + s.Running + s.Connected + s.InVoice + s.Sharing + s.Ping + s.LocalChannel + s.RoomName + s.Message + (s.MyPicture != null) + s.MyDeco + s.MyDecoA + s.MyDecoB;
             return s;
+        }
+
+        private void BuildSpatialChat(VoipEngine engine, SpatialSnapshot s)
+        {
+            ChatMessage[] messages = engine.GetChat(s.ChatChannel);
+            Dictionary<uint, List<ReactionSummary>> reactions = VoipEngine.SummarizeReactions(messages);
+            foreach (ChatMessage message in messages)
+            {
+                if (message.IsReaction)
+                    continue;
+                SpatialLine line = new SpatialLine();
+                line.Who = message.SenderName;
+                line.Picture = SpatialPicture(message.IsLocal ? MyPicture() : AvatarImage(message.SenderId));
+                line.Text = message.Text;
+                FillAttachments(line, null);
+                line.TimeUtc = message.TimeUtc;
+                line.Note = message.Failed ? "Not sent" : message.Pending ? "Sending…" : null;
+                if (!message.Pending && !message.Failed && message.Sequence != 0)
+                {
+                    line.ReactKey = message.Sequence;
+                    List<ReactionSummary> summary;
+                    if (reactions.TryGetValue(message.Sequence, out summary))
+                        foreach (ReactionSummary r in summary)
+                            line.Reactions.Add(SpatialReactionFor(r.Emoji, r.Count, r.Mine));
+                }
+                s.Chat.Add(line);
+            }
+        }
+
+        private void BuildSpatialFriendChat(SpatialSnapshot s, string theirName)
+        {
+            List<FriendChatEntry> entries = _friends.GetChat(_spatialFriendId);
+            Dictionary<ulong, List<FriendReaction>> reactions = FriendChat.Summarize(entries);
+            foreach (FriendChatEntry entry in entries)
+            {
+                if (entry.ReactionTo != 0)
+                    continue;
+                SpatialLine line = new SpatialLine();
+                line.Who = entry.Mine ? _preferences.DisplayName : theirName;
+                line.Picture = entry.Mine ? s.MyPicture : null;
+                line.Text = entry.Text;
+                FillAttachments(line, _spatialFriendId);
+                line.TimeUtc = entry.TimeUtc;
+                line.Note = entry.Mine && !entry.Delivered ? "Not delivered yet" : null;
+                line.ReactKey = entry.MessageId;
+                List<FriendReaction> summary;
+                if (entry.MessageId != 0 && reactions.TryGetValue(entry.MessageId, out summary))
+                    foreach (FriendReaction r in summary)
+                        line.Reactions.Add(SpatialReactionFor(r.Emoji, r.Count, r.Mine));
+                s.FriendChat.Add(line);
+            }
         }
 
         /// <summary>WPF here can't draw colour emoji, so reactions carry the emoji pack's picture.</summary>

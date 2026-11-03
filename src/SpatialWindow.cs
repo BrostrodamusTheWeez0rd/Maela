@@ -459,8 +459,8 @@ namespace Maela
         public readonly List<SpatialRoom> Rooms = new List<SpatialRoom>();
         public readonly List<SpatialFriend> Friends = new List<SpatialFriend>();
         public readonly List<SpatialRoomChannel> Channels = new List<SpatialRoomChannel>();
-        public readonly List<SpatialLine> Chat = new List<SpatialLine>();
-        public readonly List<SpatialLine> FriendChat = new List<SpatialLine>();
+        public List<SpatialLine> Chat = new List<SpatialLine>(); // May be shared with later snapshots: read only.
+        public List<SpatialLine> FriendChat = new List<SpatialLine>(); // Likewise.
         public string ChatKey = String.Empty, FriendChatId, FriendChatKey = String.Empty;
         public string StructureKey = String.Empty, TalkKey = String.Empty, DockKey = String.Empty;
         public int LayoutKey;
@@ -2062,6 +2062,10 @@ namespace Maela
                 if (_skipRefresh)
                     return;
             }
+            // Sharing your screen: no more than about 60 a second, leaving the graphics card to the
+            // capture and the encoder. Whole refreshes are skipped, so motion stays evenly paced.
+            if (_state.Sharing && _refreshSeconds < 0.0145 && _clock.Elapsed.TotalSeconds - _lastFrame < 1 / 60.0 - _refreshSeconds / 2)
+                return;
             Frame();
         }
 
